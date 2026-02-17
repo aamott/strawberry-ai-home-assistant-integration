@@ -1,0 +1,63 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Strawberry Hub",
+        "description": "Enter your Strawberry Hub URL and device token to connect.",
+        "data": {
+          "hub_url": "Hub URL",
+          "hub_token": "Device Token"
+        },
+        "data_description": {
+          "hub_url": "The URL of your Strawberry Hub (e.g., http://192.168.1.100:8000)",
+          "hub_token": "JWT device token from Hub device registration"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Unable to connect to the Strawberry Hub. Check the URL and ensure the Hub is running.",
+      "invalid_auth": "Authentication failed. Check your device token.",
+      "unknown": "An unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This Hub is already configured."
+    }
+  },
+  "config_subentries": {
+    "conversation": {
+      "initiate_flow": {
+        "user": "Add conversation agent"
+      },
+      "step": {
+        "set_options": {
+          "title": "Conversation Options",
+          "data": {
+            "name": "Name",
+            "prompt": "System Prompt",
+            "llm_hass_api": "Control Home Assistant",
+            "recommended": "Use recommended settings",
+            "offline_provider": "Offline LLM Provider",
+            "offline_api_key": "Offline LLM API Key",
+            "offline_model": "Offline LLM Model",
+            "ollama_url": "Ollama URL"
+          },
+          "data_description": {
+            "prompt": "Custom instructions for the AI. Supports Home Assistant templates.",
+            "llm_hass_api": "Allow the AI to control exposed Home Assistant entities.",
+            "offline_provider": "LLM provider to use when the Hub is unreachable.",
+            "offline_api_key": "API key for the offline LLM provider.",
+            "offline_model": "Model name for the offline LLM provider.",
+            "ollama_url": "URL for local Ollama instance (only when offline provider is Ollama)."
+          }
+        }
+      }
+    }
+  },
+  "entity": {
+    "conversation": {
+      "strawberry": {
+        "name": "Strawberry"
+      }
+    }
+  }
+}

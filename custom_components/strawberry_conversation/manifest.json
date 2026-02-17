@@ -1,0 +1,11 @@
+{
+  "domain": "strawberry_conversation",
+  "name": "Strawberry AI Conversation",
+  "codeowners": ["@aamott"],
+  "config_flow": true,
+  "dependencies": ["conversation"],
+  "documentation": "https://github.com/aamott/strawberry-ha-integration",
+  "iot_class": "cloud_polling",
+  "requirements": ["httpx>=0.27.0"],
+  "version": "0.1.0"
+}
