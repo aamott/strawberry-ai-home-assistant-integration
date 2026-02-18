@@ -1,7 +1,7 @@
 # [Strawberry AI Conversation for Home Assistant](https://github.com/aamott/strawberry-ai-home-assistant-integration)
 
 A custom Home Assistant integration that adds a **conversation agent** powered
-by the [Strawberry AI Assistant](https://github.com/aamott/strawberry-assistant)
+by the [Strawberry AI Assistant](https://github.com/aamott/strawberry-ai-assistant)
 Hub.
 
 ## Features
