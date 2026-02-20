@@ -17,6 +17,14 @@ from homeassistant.components import conversation
 from homeassistant.helpers import llm
 
 from .const import (
+    CONF_OFFLINE_ANTHROPIC_API_KEY,
+    CONF_OFFLINE_ANTHROPIC_MODEL,
+    CONF_OFFLINE_FALLBACK_PROVIDERS,
+    CONF_OFFLINE_GOOGLE_API_KEY,
+    CONF_OFFLINE_GOOGLE_MODEL,
+    CONF_OFFLINE_OLLAMA_MODEL,
+    CONF_OFFLINE_OPENAI_API_KEY,
+    CONF_OFFLINE_OPENAI_MODEL,
     DEFAULT_MODELS,
     DEFAULT_OLLAMA_URL,
     PROVIDER_ANTHROPIC,
@@ -221,6 +229,89 @@ def _parse_tool_call_arguments(raw_arguments: str) -> dict[str, Any]:
     return decoded if isinstance(decoded, dict) else {}
 
 
+def _provider_chain(
+    primary: str,
+    fallbacks: list[str] | None,
+) -> list[str]:
+    """Build ordered provider chain with duplicates and disabled entries removed."""
+    chain: list[str] = []
+
+    for provider in [primary, *(fallbacks or [])]:
+        if provider in ("", PROVIDER_NONE):
+            continue
+        if provider not in chain:
+            chain.append(provider)
+
+    return chain
+
+
+def _resolve_provider_api_key(
+    provider: str,
+    legacy_api_key: str | None,
+    provider_api_keys: dict[str, str | None] | None,
+) -> str | None:
+    """Resolve API key for provider, preserving legacy single-key behavior."""
+    if provider_api_keys and provider in provider_api_keys:
+        return provider_api_keys[provider]
+    return legacy_api_key
+
+
+def _resolve_provider_model(
+    provider: str,
+    legacy_model: str | None,
+    provider_models: dict[str, str | None] | None,
+) -> str | None:
+    """Resolve model for provider, preserving legacy single-model behavior."""
+    if provider_models and provider in provider_models:
+        return provider_models[provider]
+    return legacy_model
+
+
+async def _request_with_provider_fallback(
+    provider_chain: list[str],
+    legacy_api_key: str | None,
+    legacy_model: str | None,
+    provider_api_keys: dict[str, str | None] | None,
+    provider_models: dict[str, str | None] | None,
+    ollama_url: str | None,
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    request_completion: RequestCompletionCallable,
+) -> dict[str, Any] | None:
+    """Try providers in order until one returns a valid response."""
+    for provider in provider_chain:
+        if provider == PROVIDER_ANTHROPIC:
+            logger.warning(
+                "Skipping anthropic fallback provider; not yet implemented in local adapter"
+            )
+            continue
+
+        provider_api_key = _resolve_provider_api_key(
+            provider,
+            legacy_api_key,
+            provider_api_keys,
+        )
+        provider_model = _resolve_provider_model(
+            provider,
+            legacy_model,
+            provider_models,
+        )
+
+        try:
+            return await request_completion(
+                provider,
+                provider_api_key,
+                provider_model,
+                ollama_url,
+                messages,
+                tools,
+            )
+        except Exception:
+            logger.exception("Offline provider %s request failed", provider)
+
+    return None
+
+
 async def run_local_agent_loop(
     chat_log: ChatLog,
     api_instance: APIInstance | None,
@@ -230,6 +321,9 @@ async def run_local_agent_loop(
     offline_api_key: str | None,
     offline_model: str | None,
     ollama_url: str | None,
+    fallback_providers: list[str] | None = None,
+    provider_api_keys: dict[str, str | None] | None = None,
+    provider_models: dict[str, str | None] | None = None,
     max_iterations: int = 10,
     request_completion: RequestCompletionCallable | None = None,
 ) -> str | None:
@@ -249,20 +343,18 @@ async def run_local_agent_loop(
         offline_api_key: API key for provider when required.
         offline_model: Optional model override.
         ollama_url: Optional Ollama OpenAI-compatible base URL.
+        fallback_providers: Ordered fallback providers after the primary provider.
+        provider_api_keys: Per-provider API key mapping.
+        provider_models: Per-provider model mapping.
         max_iterations: Maximum tool call iterations.
         request_completion: Injectable completion function for tests.
 
     Returns:
         Final response content, or ``None`` if local mode cannot respond.
     """
-    if offline_provider == PROVIDER_NONE:
-        logger.debug("Offline provider is disabled")
-        return None
-
-    if offline_provider == PROVIDER_ANTHROPIC:
-        logger.warning(
-            "Anthropic offline provider is not yet implemented in the local adapter"
-        )
+    provider_chain = _provider_chain(offline_provider, fallback_providers)
+    if not provider_chain:
+        logger.debug("No offline providers configured")
         return None
 
     if api_instance is None:
@@ -284,17 +376,19 @@ async def run_local_agent_loop(
         logger.debug("Local loop iteration %s", iteration + 1)
         messages = _chat_log_to_model_messages(chat_log)
 
-        try:
-            raw_response = await request_completion(
-                offline_provider,
-                offline_api_key,
-                offline_model,
-                ollama_url,
-                messages,
-                tools,
-            )
-        except Exception:
-            logger.exception("Offline provider request failed")
+        raw_response = await _request_with_provider_fallback(
+            provider_chain=provider_chain,
+            legacy_api_key=offline_api_key,
+            legacy_model=offline_model,
+            provider_api_keys=provider_api_keys,
+            provider_models=provider_models,
+            ollama_url=ollama_url,
+            messages=messages,
+            tools=tools,
+            request_completion=request_completion,
+        )
+        if raw_response is None:
+            logger.warning("All configured offline providers failed")
             return None
 
         try:
@@ -347,3 +441,35 @@ async def run_local_agent_loop(
 
     logger.warning("Local loop reached max iterations (%s)", max_iterations)
     return None
+
+
+def provider_key_map_from_options(options: dict[str, Any]) -> dict[str, str | None]:
+    """Build per-provider API key mapping from config entry options."""
+    return {
+        PROVIDER_OPENAI: options.get(CONF_OFFLINE_OPENAI_API_KEY),
+        PROVIDER_GOOGLE: options.get(CONF_OFFLINE_GOOGLE_API_KEY),
+        PROVIDER_ANTHROPIC: options.get(CONF_OFFLINE_ANTHROPIC_API_KEY),
+    }
+
+
+def provider_model_map_from_options(options: dict[str, Any]) -> dict[str, str | None]:
+    """Build per-provider model mapping from config entry options."""
+    return {
+        PROVIDER_OPENAI: options.get(CONF_OFFLINE_OPENAI_MODEL, DEFAULT_MODELS[PROVIDER_OPENAI]),
+        PROVIDER_GOOGLE: options.get(CONF_OFFLINE_GOOGLE_MODEL, DEFAULT_MODELS[PROVIDER_GOOGLE]),
+        PROVIDER_ANTHROPIC: options.get(
+            CONF_OFFLINE_ANTHROPIC_MODEL,
+            DEFAULT_MODELS[PROVIDER_ANTHROPIC],
+        ),
+        PROVIDER_OLLAMA: options.get(CONF_OFFLINE_OLLAMA_MODEL, DEFAULT_MODELS[PROVIDER_OLLAMA]),
+    }
+
+
+def fallback_providers_from_options(options: dict[str, Any]) -> list[str]:
+    """Read fallback provider list from options with robust type handling."""
+    raw = options.get(CONF_OFFLINE_FALLBACK_PROVIDERS, [])
+    if isinstance(raw, str):
+        return [raw]
+    if isinstance(raw, list):
+        return [str(item) for item in raw]
+    return []

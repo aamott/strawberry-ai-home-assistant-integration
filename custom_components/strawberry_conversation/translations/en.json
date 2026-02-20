@@ -37,17 +37,33 @@
             "llm_hass_api": "Control Home Assistant",
             "recommended": "Use recommended settings",
             "offline_provider": "Offline LLM Provider",
+            "offline_fallback_providers": "Offline fallback provider order",
             "offline_api_key": "Offline LLM API Key",
             "offline_model": "Offline LLM Model",
+            "offline_openai_api_key": "OpenAI API Key",
+            "offline_openai_model": "OpenAI Model",
+            "offline_google_api_key": "Google API Key",
+            "offline_google_model": "Google Model",
+            "offline_anthropic_api_key": "Anthropic API Key",
+            "offline_anthropic_model": "Anthropic Model",
+            "offline_ollama_model": "Ollama Model",
             "ollama_url": "Ollama URL"
           },
           "data_description": {
             "prompt": "Custom instructions for the AI. Supports Home Assistant templates.",
             "llm_hass_api": "Allow the AI to control exposed Home Assistant entities.",
-            "offline_provider": "LLM provider to use when the Hub is unreachable.",
-            "offline_api_key": "API key for the offline LLM provider.",
-            "offline_model": "Model name for the offline LLM provider.",
-            "ollama_url": "URL for local Ollama instance (only when offline provider is Ollama)."
+            "offline_provider": "Primary LLM provider to use when the Hub is unreachable.",
+            "offline_fallback_providers": "Ordered fallback providers to try if the primary provider fails.",
+            "offline_api_key": "Legacy shared API key used if provider-specific keys are not set.",
+            "offline_model": "Legacy shared model used if provider-specific models are not set.",
+            "offline_openai_api_key": "API key used when OpenAI is selected in the offline chain.",
+            "offline_openai_model": "OpenAI model for offline mode.",
+            "offline_google_api_key": "API key used when Google is selected in the offline chain.",
+            "offline_google_model": "Google model for offline mode.",
+            "offline_anthropic_api_key": "API key used when Anthropic is selected in the offline chain.",
+            "offline_anthropic_model": "Anthropic model for offline mode.",
+            "offline_ollama_model": "Ollama model for offline mode.",
+            "ollama_url": "URL for local Ollama OpenAI-compatible endpoint."
           }
         }
       }

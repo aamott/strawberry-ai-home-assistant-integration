@@ -31,8 +31,16 @@ from homeassistant.helpers.selector import (
 from .const import (
     CONF_HUB_TOKEN,
     CONF_HUB_URL,
+    CONF_OFFLINE_ANTHROPIC_API_KEY,
+    CONF_OFFLINE_ANTHROPIC_MODEL,
     CONF_OFFLINE_API_KEY,
+    CONF_OFFLINE_FALLBACK_PROVIDERS,
+    CONF_OFFLINE_GOOGLE_API_KEY,
+    CONF_OFFLINE_GOOGLE_MODEL,
     CONF_OFFLINE_MODEL,
+    CONF_OFFLINE_OLLAMA_MODEL,
+    CONF_OFFLINE_OPENAI_API_KEY,
+    CONF_OFFLINE_OPENAI_MODEL,
     CONF_OFFLINE_PROVIDER,
     CONF_OLLAMA_URL,
     CONF_PROMPT,
@@ -46,11 +54,27 @@ from .const import (
     OFFLINE_PROVIDERS,
     PROVIDER_NONE,
     PROVIDER_OLLAMA,
+    PROVIDER_OPENAI,
+    PROVIDER_GOOGLE,
+    PROVIDER_ANTHROPIC,
     RECOMMENDED_CONVERSATION_OPTIONS,
 )
 from .hub_client import StrawberryHubClient
 
 _LOGGER = logging.getLogger(__name__)
+
+_PROVIDER_API_KEY_FIELD_MAP = {
+    PROVIDER_OPENAI: CONF_OFFLINE_OPENAI_API_KEY,
+    PROVIDER_GOOGLE: CONF_OFFLINE_GOOGLE_API_KEY,
+    PROVIDER_ANTHROPIC: CONF_OFFLINE_ANTHROPIC_API_KEY,
+}
+
+_PROVIDER_MODEL_FIELD_MAP = {
+    PROVIDER_OPENAI: CONF_OFFLINE_OPENAI_MODEL,
+    PROVIDER_GOOGLE: CONF_OFFLINE_GOOGLE_MODEL,
+    PROVIDER_ANTHROPIC: CONF_OFFLINE_ANTHROPIC_MODEL,
+    PROVIDER_OLLAMA: CONF_OFFLINE_OLLAMA_MODEL,
+}
 
 # Schema for the initial Hub connection step
 STEP_HUB_DATA_SCHEMA = vol.Schema(
@@ -191,10 +215,26 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
                     user_input.pop(CONF_LLM_HASS_API, None)
                 if not user_input.get(CONF_OFFLINE_API_KEY):
                     user_input.pop(CONF_OFFLINE_API_KEY, None)
+                if not user_input.get(CONF_OFFLINE_FALLBACK_PROVIDERS):
+                    user_input.pop(CONF_OFFLINE_FALLBACK_PROVIDERS, None)
+
+                for field in _PROVIDER_API_KEY_FIELD_MAP.values():
+                    if not user_input.get(field):
+                        user_input.pop(field, None)
+
+                for field in _PROVIDER_MODEL_FIELD_MAP.values():
+                    if not user_input.get(field):
+                        user_input.pop(field, None)
+
                 if user_input.get(CONF_OFFLINE_PROVIDER) == PROVIDER_NONE:
                     user_input.pop(CONF_OFFLINE_API_KEY, None)
                     user_input.pop(CONF_OFFLINE_MODEL, None)
                     user_input.pop(CONF_OLLAMA_URL, None)
+                    user_input.pop(CONF_OFFLINE_FALLBACK_PROVIDERS, None)
+                    for field in _PROVIDER_API_KEY_FIELD_MAP.values():
+                        user_input.pop(field, None)
+                    for field in _PROVIDER_MODEL_FIELD_MAP.values():
+                        user_input.pop(field, None)
 
                 if self._is_new:
                     return self.async_create_entry(
@@ -291,6 +331,11 @@ def _build_conversation_schema(
         SelectOptionDict(label=p.title(), value=p)
         for p in OFFLINE_PROVIDERS
     ]
+    fallback_provider_options = [
+        SelectOptionDict(label=p.title(), value=p)
+        for p in OFFLINE_PROVIDERS
+        if p != PROVIDER_NONE
+    ]
     schema[vol.Optional(
         CONF_OFFLINE_PROVIDER,
         description={
@@ -304,42 +349,115 @@ def _build_conversation_schema(
         )
     )
 
-    # Only show provider-specific fields if a provider is selected
-    selected_provider = options.get(CONF_OFFLINE_PROVIDER, PROVIDER_NONE)
-    if selected_provider and selected_provider != PROVIDER_NONE:
-        # API key (not needed for Ollama)
-        if selected_provider != PROVIDER_OLLAMA:
-            schema[vol.Optional(
-                CONF_OFFLINE_API_KEY,
-                description={
-                    "suggested_value": options.get(CONF_OFFLINE_API_KEY, "")
-                },
-            )] = TextSelector(
-                TextSelectorConfig(type=TextSelectorType.PASSWORD)
+    schema[vol.Optional(
+        CONF_OFFLINE_FALLBACK_PROVIDERS,
+        description={
+            "suggested_value": options.get(CONF_OFFLINE_FALLBACK_PROVIDERS, [])
+        },
+    )] = SelectSelector(
+        SelectSelectorConfig(
+            mode=SelectSelectorMode.DROPDOWN,
+            options=fallback_provider_options,
+            multiple=True,
+        )
+    )
+
+    # Legacy shared API key/model remain visible for backward compatibility.
+    schema[vol.Optional(
+        CONF_OFFLINE_API_KEY,
+        description={
+            "suggested_value": options.get(CONF_OFFLINE_API_KEY, "")
+        },
+    )] = TextSelector(
+        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+    )
+
+    schema[vol.Optional(
+        CONF_OFFLINE_MODEL,
+        description={
+            "suggested_value": options.get(CONF_OFFLINE_MODEL, "")
+        },
+    )] = str
+
+    schema[vol.Optional(
+        CONF_OFFLINE_OPENAI_API_KEY,
+        description={
+            "suggested_value": options.get(CONF_OFFLINE_OPENAI_API_KEY, "")
+        },
+    )] = TextSelector(
+        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+    )
+    schema[vol.Optional(
+        CONF_OFFLINE_OPENAI_MODEL,
+        description={
+            "suggested_value": options.get(
+                CONF_OFFLINE_OPENAI_MODEL,
+                DEFAULT_MODELS[PROVIDER_OPENAI],
             )
+        },
+        default=DEFAULT_MODELS[PROVIDER_OPENAI],
+    )] = str
 
-        # Model name
-        default_model = DEFAULT_MODELS.get(selected_provider, "")
-        schema[vol.Optional(
-            CONF_OFFLINE_MODEL,
-            description={
-                "suggested_value": options.get(CONF_OFFLINE_MODEL, default_model)
-            },
-            default=default_model,
-        )] = str
+    schema[vol.Optional(
+        CONF_OFFLINE_GOOGLE_API_KEY,
+        description={
+            "suggested_value": options.get(CONF_OFFLINE_GOOGLE_API_KEY, "")
+        },
+    )] = TextSelector(
+        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+    )
+    schema[vol.Optional(
+        CONF_OFFLINE_GOOGLE_MODEL,
+        description={
+            "suggested_value": options.get(
+                CONF_OFFLINE_GOOGLE_MODEL,
+                DEFAULT_MODELS[PROVIDER_GOOGLE],
+            )
+        },
+        default=DEFAULT_MODELS[PROVIDER_GOOGLE],
+    )] = str
 
-        # Ollama URL (only for Ollama provider)
-        if selected_provider == PROVIDER_OLLAMA:
-            schema[vol.Optional(
+    schema[vol.Optional(
+        CONF_OFFLINE_ANTHROPIC_API_KEY,
+        description={
+            "suggested_value": options.get(CONF_OFFLINE_ANTHROPIC_API_KEY, "")
+        },
+    )] = TextSelector(
+        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+    )
+    schema[vol.Optional(
+        CONF_OFFLINE_ANTHROPIC_MODEL,
+        description={
+            "suggested_value": options.get(
+                CONF_OFFLINE_ANTHROPIC_MODEL,
+                DEFAULT_MODELS[PROVIDER_ANTHROPIC],
+            )
+        },
+        default=DEFAULT_MODELS[PROVIDER_ANTHROPIC],
+    )] = str
+
+    schema[vol.Optional(
+        CONF_OFFLINE_OLLAMA_MODEL,
+        description={
+            "suggested_value": options.get(
+                CONF_OFFLINE_OLLAMA_MODEL,
+                DEFAULT_MODELS[PROVIDER_OLLAMA],
+            )
+        },
+        default=DEFAULT_MODELS[PROVIDER_OLLAMA],
+    )] = str
+
+    schema[vol.Optional(
+        CONF_OLLAMA_URL,
+        description={
+            "suggested_value": options.get(
                 CONF_OLLAMA_URL,
-                description={
-                    "suggested_value": options.get(
-                        CONF_OLLAMA_URL, DEFAULT_OLLAMA_URL
-                    )
-                },
-                default=DEFAULT_OLLAMA_URL,
-            )] = TextSelector(
-                TextSelectorConfig(type=TextSelectorType.URL)
+                DEFAULT_OLLAMA_URL,
             )
+        },
+        default=DEFAULT_OLLAMA_URL,
+    )] = TextSelector(
+        TextSelectorConfig(type=TextSelectorType.URL)
+    )
 
     return schema

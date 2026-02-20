@@ -37,7 +37,33 @@ Hub.
 1. Go to **Settings** → **Devices & Services** → **Add Integration**
 2. Search for **Strawberry AI Conversation**
 3. Enter your Hub URL and device token
-4. Configure conversation options (system prompt, HA control, offline provider)
+4. Open the created entry and click **Configure** on the conversation subentry
+5. Turn **Use recommended settings** off to show offline controls
+
+### Configure offline LLMs in the Home Assistant UI
+
+All offline settings are in the integration's **Conversation Options** form.
+
+1. Set **Offline LLM Provider** (primary provider)
+2. Set **Offline fallback provider order** (providers to try if primary fails)
+3. Add provider credentials in the same form:
+   - **OpenAI API Key** / **OpenAI Model**
+   - **Google API Key** / **Google Model**
+   - **Anthropic API Key** / **Anthropic Model**
+   - **Ollama Model** and **Ollama URL**
+
+Notes:
+- The fallback list is ordered. The integration tries providers in order.
+- If provider-specific keys/models are set, they take precedence.
+- Legacy shared fields (**Offline LLM API Key**, **Offline LLM Model**) are still supported for backward compatibility.
+
+### Example fallback chain
+
+- Primary: `openai`
+- Fallback order: `google`, `ollama`
+
+If the Hub is offline and OpenAI fails, the integration tries Google next,
+then Ollama.
 
 ### Getting a Device Token
 
@@ -71,6 +97,7 @@ and can only control HA entities via the native Assist API.
 - Home Assistant 2024.7.0+
 - Strawberry Hub running and accessible on the network
 - A registered device token from the Hub
+- API keys for any cloud offline providers you configure (OpenAI/Google/Anthropic)
 
 ## Development
 

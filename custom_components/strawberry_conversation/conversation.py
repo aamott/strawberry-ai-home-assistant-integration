@@ -26,7 +26,12 @@ from .const import (
     MAX_TOOL_ITERATIONS,
 )
 from .hub_client import HubAuthError, HubConnectionError, StrawberryHubClient
-from .local_agent import run_local_agent_loop
+from .local_agent import (
+    fallback_providers_from_options,
+    provider_key_map_from_options,
+    provider_model_map_from_options,
+    run_local_agent_loop,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -248,6 +253,9 @@ class StrawberryConversationEntity(
             offline_api_key=options.get(CONF_OFFLINE_API_KEY),
             offline_model=options.get(CONF_OFFLINE_MODEL),
             ollama_url=options.get(CONF_OLLAMA_URL),
+            fallback_providers=fallback_providers_from_options(options),
+            provider_api_keys=provider_key_map_from_options(options),
+            provider_models=provider_model_map_from_options(options),
             max_iterations=MAX_TOOL_ITERATIONS,
         )
 

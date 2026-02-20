@@ -170,6 +170,9 @@ try:
         StrawberryHubClient,
     )
     from custom_components.strawberry_conversation.local_agent import (
+        fallback_providers_from_options,
+        provider_key_map_from_options,
+        provider_model_map_from_options,
         run_local_agent_loop,
     )
 except ImportError:
@@ -183,6 +186,9 @@ except ImportError:
         StrawberryHubClient,
     )
     from custom_components.strawberry_conversation.local_agent import (
+        fallback_providers_from_options,
+        provider_key_map_from_options,
+        provider_model_map_from_options,
         run_local_agent_loop,
     )
 
@@ -412,6 +418,82 @@ class TestLocalAgentLoop(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, "Done! The bedroom lamp is on.")
         api_instance.async_call_tool.assert_awaited_once()
+
+    async def test_fallback_provider_is_used_when_primary_fails(self) -> None:
+        """Local loop should continue to next provider if primary request fails."""
+        conversation_mod = sys.modules["homeassistant.components.conversation"]
+        chat_log = conversation_mod.ChatLog()
+        chat_log.content.append(conversation_mod.UserContent(content="hi"))
+
+        api_instance = AsyncMock()
+        api_instance.tools = []
+        chat_log.llm_api = api_instance
+
+        call_order: list[str] = []
+
+        async def fake_request(
+            provider,
+            api_key,
+            model,
+            ollama_url,
+            messages,
+            tools,
+        ):
+            call_order.append(provider)
+            if provider == "openai":
+                raise RuntimeError("openai down")
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "fallback worked",
+                        }
+                    }
+                ]
+            }
+
+        result = await run_local_agent_loop(
+            chat_log=chat_log,
+            api_instance=api_instance,
+            system_prompt="sys",
+            agent_id="conversation.strawberry_ai",
+            offline_provider="openai",
+            offline_api_key="legacy",
+            offline_model="legacy-model",
+            ollama_url=None,
+            fallback_providers=["google"],
+            provider_api_keys={"openai": "openai-key", "google": "google-key"},
+            provider_models={"openai": "o-model", "google": "g-model"},
+            request_completion=fake_request,
+        )
+
+        self.assertEqual(result, "fallback worked")
+        self.assertEqual(call_order, ["openai", "google"])
+
+    def test_provider_maps_from_options(self) -> None:
+        """Options helper functions should parse fallback and provider maps."""
+        options = {
+            "offline_fallback_providers": ["google", "ollama"],
+            "offline_openai_api_key": "openai-key",
+            "offline_google_api_key": "google-key",
+            "offline_openai_model": "o-model",
+            "offline_google_model": "g-model",
+            "offline_ollama_model": "llama3.2:latest",
+        }
+
+        self.assertEqual(
+            fallback_providers_from_options(options),
+            ["google", "ollama"],
+        )
+        self.assertEqual(
+            provider_key_map_from_options(options)["openai"],
+            "openai-key",
+        )
+        self.assertEqual(
+            provider_model_map_from_options(options)["google"],
+            "g-model",
+        )
 
 
 if __name__ == "__main__":
