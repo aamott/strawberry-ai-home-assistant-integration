@@ -19,6 +19,8 @@ CONF_OFFLINE_OPENAI_MODEL = "offline_openai_model"
 CONF_OFFLINE_GOOGLE_MODEL = "offline_google_model"
 CONF_OFFLINE_ANTHROPIC_MODEL = "offline_anthropic_model"
 CONF_OFFLINE_OLLAMA_MODEL = "offline_ollama_model"
+CONF_OFFLINE_BACKEND = "offline_backend"
+CONF_TENSORZERO_FUNCTION_NAME = "tensorzero_function_name"
 CONF_OLLAMA_URL = "ollama_url"
 CONF_PROMPT = "prompt"
 CONF_RECOMMENDED = "recommended"
@@ -36,12 +38,22 @@ PROVIDER_ANTHROPIC = "anthropic"
 PROVIDER_OLLAMA = "ollama"
 PROVIDER_NONE = "none"
 
+OFFLINE_BACKEND_AUTO = "auto"
+OFFLINE_BACKEND_OPENAI_COMPAT = "openai_compat"
+OFFLINE_BACKEND_TENSORZERO = "tensorzero"
+
 OFFLINE_PROVIDERS = [
     PROVIDER_NONE,
     PROVIDER_GOOGLE,
     PROVIDER_OPENAI,
     PROVIDER_ANTHROPIC,
     PROVIDER_OLLAMA,
+]
+
+OFFLINE_BACKENDS = [
+    OFFLINE_BACKEND_AUTO,
+    OFFLINE_BACKEND_OPENAI_COMPAT,
+    OFFLINE_BACKEND_TENSORZERO,
 ]
 
 # Default models per provider

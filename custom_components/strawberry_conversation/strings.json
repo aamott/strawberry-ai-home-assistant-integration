@@ -36,6 +36,8 @@
             "prompt": "System Prompt",
             "llm_hass_api": "Control Home Assistant",
             "recommended": "Use recommended settings",
+            "offline_backend": "Offline backend",
+            "tensorzero_function_name": "TensorZero function",
             "offline_provider": "Offline LLM Provider",
             "offline_fallback_providers": "Offline fallback provider order",
             "offline_api_key": "Offline LLM API Key",
@@ -52,6 +54,8 @@
           "data_description": {
             "prompt": "Custom instructions for the AI. Supports Home Assistant templates.",
             "llm_hass_api": "Allow the AI to control exposed Home Assistant entities.",
+            "offline_backend": "Backend used for offline mode: Auto prefers TensorZero when installed; OpenAI-compatible uses direct provider APIs.",
+            "tensorzero_function_name": "TensorZero function name to invoke (for example: chat).",
             "offline_provider": "Primary LLM provider to use when the Hub is unreachable.",
             "offline_fallback_providers": "Ordered fallback providers to try if the primary provider fails.",
             "offline_api_key": "Legacy shared API key used if provider-specific keys are not set.",

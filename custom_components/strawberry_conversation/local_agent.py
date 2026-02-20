@@ -10,13 +10,20 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 import httpx
 from homeassistant.components import conversation
 from homeassistant.helpers import llm
 
+try:
+    from tensorzero import AsyncTensorZeroGateway
+except Exception:  # pragma: no cover
+    AsyncTensorZeroGateway = None  # type: ignore[assignment]
+
 from .const import (
+    CONF_OFFLINE_BACKEND,
     CONF_OFFLINE_ANTHROPIC_API_KEY,
     CONF_OFFLINE_ANTHROPIC_MODEL,
     CONF_OFFLINE_FALLBACK_PROVIDERS,
@@ -27,11 +34,14 @@ from .const import (
     CONF_OFFLINE_OPENAI_MODEL,
     DEFAULT_MODELS,
     DEFAULT_OLLAMA_URL,
+    OFFLINE_BACKEND_AUTO,
+    OFFLINE_BACKEND_TENSORZERO,
     PROVIDER_ANTHROPIC,
     PROVIDER_GOOGLE,
     PROVIDER_NONE,
     PROVIDER_OLLAMA,
     PROVIDER_OPENAI,
+    CONF_TENSORZERO_FUNCTION_NAME,
 )
 
 if TYPE_CHECKING:
@@ -57,6 +67,7 @@ type RequestCompletionCallable = Callable[
 ]
 
 logger = logging.getLogger(__name__)
+_tensorzero_gateway: AsyncTensorZeroGateway | None = None
 
 
 def _build_provider_request_context(
@@ -206,6 +217,135 @@ async def _request_openai_compatible_completion(
         return response.json()
 
 
+def _extract_text_from_tz_block(block: Any) -> str:
+    """Extract text from a TensorZero block object or dict."""
+    if hasattr(block, "text"):
+        text = getattr(block, "text", "")
+        return str(text) if text else ""
+    if isinstance(block, dict) and block.get("type") == "text":
+        text = block.get("text", "")
+        return str(text) if text else ""
+    return ""
+
+
+def _extract_tool_call_from_tz_block(block: Any) -> dict[str, Any] | None:
+    """Extract a tool_call dict from a TensorZero block object or dict."""
+    if hasattr(block, "type") and getattr(block, "type", None) == "tool_call":
+        name = getattr(block, "name", None) or getattr(block, "raw_name", None)
+        arguments: Any = getattr(block, "arguments", None)
+        if not isinstance(arguments, dict):
+            raw_arguments = getattr(block, "raw_arguments", "")
+            arguments = _parse_tool_call_arguments(raw_arguments)
+        if not name:
+            return None
+        return {
+            "id": str(getattr(block, "id", "") or llm.ulid_now()),
+            "type": "function",
+            "function": {
+                "name": str(name),
+                "arguments": json.dumps(arguments),
+            },
+        }
+
+    if isinstance(block, dict) and block.get("type") == "tool_call":
+        name = block.get("name") or block.get("raw_name")
+        if not name:
+            return None
+        arguments = block.get("arguments")
+        if not isinstance(arguments, dict):
+            arguments = _parse_tool_call_arguments(block.get("raw_arguments", ""))
+        return {
+            "id": str(block.get("id") or llm.ulid_now()),
+            "type": "function",
+            "function": {
+                "name": str(name),
+                "arguments": json.dumps(arguments),
+            },
+        }
+
+    return None
+
+
+def _extract_message_from_tz_response(response: Any) -> dict[str, Any]:
+    """Convert TensorZero response object/dict to OpenAI-like message dict."""
+    if isinstance(response, dict):
+        content_blocks = response.get("content") or []
+    elif hasattr(response, "content"):
+        content_blocks = getattr(response, "content", []) or []
+    else:
+        content_blocks = []
+
+    content = ""
+    tool_calls: list[dict[str, Any]] = []
+    for block in content_blocks:
+        content += _extract_text_from_tz_block(block)
+        tool_call = _extract_tool_call_from_tz_block(block)
+        if tool_call:
+            tool_calls.append(tool_call)
+
+    message: dict[str, Any] = {"role": "assistant", "content": content}
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+    return message
+
+
+def _resolve_tensorzero_config_path() -> str:
+    """Resolve TensorZero config path from environment.
+
+    Uses ``TENSORZERO_CONFIG_PATH``. This avoids hardcoding deployment-specific
+    paths in the integration and lets the host environment provide config.
+    """
+    config_path = os.getenv("TENSORZERO_CONFIG_PATH")
+    if not config_path:
+        raise RuntimeError(
+            "TENSORZERO_CONFIG_PATH is not set; cannot initialize TensorZero backend"
+        )
+    return config_path
+
+
+async def _get_tensorzero_gateway() -> AsyncTensorZeroGateway:
+    """Get or initialize a shared TensorZero embedded gateway."""
+    global _tensorzero_gateway
+    if AsyncTensorZeroGateway is None:
+        raise RuntimeError("tensorzero package is not installed")
+
+    if _tensorzero_gateway is not None:
+        return _tensorzero_gateway
+
+    config_path = _resolve_tensorzero_config_path()
+    _tensorzero_gateway = await AsyncTensorZeroGateway.build_embedded(
+        config_file=config_path,
+        async_setup=True,
+    )
+    return _tensorzero_gateway
+
+
+async def _request_tensorzero_completion(
+    messages: list[dict[str, Any]],
+    system_prompt: str,
+    function_name: str,
+) -> dict[str, Any]:
+    """Call TensorZero and normalize output into OpenAI-like shape."""
+    gateway = await _get_tensorzero_gateway()
+    tz_input: dict[str, Any] = {
+        "messages": [m for m in messages if m.get("role") != "system"]
+    }
+    if system_prompt:
+        tz_input["system"] = system_prompt
+
+    response = await gateway.inference(
+        function_name=function_name,
+        input=tz_input,
+    )
+    return {
+        "choices": [
+            {
+                "message": _extract_message_from_tz_response(response),
+            }
+        ]
+    }
+
+
 def _extract_openai_message(response: dict[str, Any]) -> dict[str, Any]:
     """Extract first message from OpenAI-compatible response payload."""
     choices = response.get("choices")
@@ -324,6 +464,8 @@ async def run_local_agent_loop(
     fallback_providers: list[str] | None = None,
     provider_api_keys: dict[str, str | None] | None = None,
     provider_models: dict[str, str | None] | None = None,
+    offline_backend: str = OFFLINE_BACKEND_AUTO,
+    tensorzero_function_name: str = "chat",
     max_iterations: int = 10,
     request_completion: RequestCompletionCallable | None = None,
 ) -> str | None:
@@ -346,6 +488,8 @@ async def run_local_agent_loop(
         fallback_providers: Ordered fallback providers after the primary provider.
         provider_api_keys: Per-provider API key mapping.
         provider_models: Per-provider model mapping.
+        offline_backend: Backend for local mode (``auto``, ``openai_compat``, ``tensorzero``).
+        tensorzero_function_name: TensorZero function name to call when enabled.
         max_iterations: Maximum tool call iterations.
         request_completion: Injectable completion function for tests.
 
@@ -364,6 +508,17 @@ async def run_local_agent_loop(
     if request_completion is None:
         request_completion = _request_openai_compatible_completion
 
+    use_tensorzero = offline_backend == OFFLINE_BACKEND_TENSORZERO or (
+        offline_backend == OFFLINE_BACKEND_AUTO and AsyncTensorZeroGateway is not None
+    )
+
+    if use_tensorzero and AsyncTensorZeroGateway is None:
+        logger.warning(
+            "TensorZero backend selected but tensorzero package is unavailable; "
+            "falling back to OpenAI-compatible HTTP path"
+        )
+        use_tensorzero = False
+
     if system_prompt and (
         not chat_log.content
         or not isinstance(chat_log.content[0], conversation.SystemContent)
@@ -376,17 +531,40 @@ async def run_local_agent_loop(
         logger.debug("Local loop iteration %s", iteration + 1)
         messages = _chat_log_to_model_messages(chat_log)
 
-        raw_response = await _request_with_provider_fallback(
-            provider_chain=provider_chain,
-            legacy_api_key=offline_api_key,
-            legacy_model=offline_model,
-            provider_api_keys=provider_api_keys,
-            provider_models=provider_models,
-            ollama_url=ollama_url,
-            messages=messages,
-            tools=tools,
-            request_completion=request_completion,
-        )
+        if use_tensorzero:
+            try:
+                raw_response = await _request_tensorzero_completion(
+                    messages=messages,
+                    system_prompt=system_prompt,
+                    function_name=tensorzero_function_name,
+                )
+            except Exception:
+                logger.exception(
+                    "TensorZero request failed; falling back to OpenAI-compatible providers"
+                )
+                raw_response = await _request_with_provider_fallback(
+                    provider_chain=provider_chain,
+                    legacy_api_key=offline_api_key,
+                    legacy_model=offline_model,
+                    provider_api_keys=provider_api_keys,
+                    provider_models=provider_models,
+                    ollama_url=ollama_url,
+                    messages=messages,
+                    tools=tools,
+                    request_completion=request_completion,
+                )
+        else:
+            raw_response = await _request_with_provider_fallback(
+                provider_chain=provider_chain,
+                legacy_api_key=offline_api_key,
+                legacy_model=offline_model,
+                provider_api_keys=provider_api_keys,
+                provider_models=provider_models,
+                ollama_url=ollama_url,
+                messages=messages,
+                tools=tools,
+                request_completion=request_completion,
+            )
         if raw_response is None:
             logger.warning("All configured offline providers failed")
             return None
@@ -473,3 +651,16 @@ def fallback_providers_from_options(options: dict[str, Any]) -> list[str]:
     if isinstance(raw, list):
         return [str(item) for item in raw]
     return []
+
+
+def offline_backend_from_options(options: dict[str, Any]) -> str:
+    """Read offline backend choice from options with robust fallback."""
+    raw = options.get(CONF_OFFLINE_BACKEND, OFFLINE_BACKEND_AUTO)
+    return str(raw) if raw else OFFLINE_BACKEND_AUTO
+
+
+def tensorzero_function_name_from_options(options: dict[str, Any]) -> str:
+    """Read TensorZero function name from options with default."""
+    raw = options.get(CONF_TENSORZERO_FUNCTION_NAME, "chat")
+    value = str(raw).strip() if raw is not None else ""
+    return value or "chat"

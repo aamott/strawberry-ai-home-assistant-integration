@@ -172,9 +172,11 @@ try:
     )
     from custom_components.strawberry_conversation.local_agent import (
         fallback_providers_from_options,
+        offline_backend_from_options,
         provider_key_map_from_options,
         provider_model_map_from_options,
         run_local_agent_loop,
+        tensorzero_function_name_from_options,
     )
 except ImportError:
     sys.path.append(INTEGRATION_ROOT)
@@ -188,9 +190,11 @@ except ImportError:
     )
     from custom_components.strawberry_conversation.local_agent import (
         fallback_providers_from_options,
+        offline_backend_from_options,
         provider_key_map_from_options,
         provider_model_map_from_options,
         run_local_agent_loop,
+        tensorzero_function_name_from_options,
     )
 
 
@@ -563,6 +567,25 @@ class TestLocalAgentLoop(unittest.IsolatedAsyncioTestCase):
             provider_model_map_from_options(options)["google"],
             "g-model",
         )
+        self.assertEqual(
+            offline_backend_from_options(options),
+            "auto",
+        )
+        self.assertEqual(
+            tensorzero_function_name_from_options(options),
+            "chat",
+        )
+
+    def test_backend_helpers_from_options(self) -> None:
+        """Backend helpers should read explicit values and apply defaults."""
+        options = {
+            "offline_backend": "tensorzero",
+            "tensorzero_function_name": "ha_chat",
+        }
+        self.assertEqual(offline_backend_from_options(options), "tensorzero")
+        self.assertEqual(tensorzero_function_name_from_options(options), "ha_chat")
+        self.assertEqual(offline_backend_from_options({}), "auto")
+        self.assertEqual(tensorzero_function_name_from_options({}), "chat")
 
 
 if __name__ == "__main__":

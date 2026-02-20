@@ -34,6 +34,7 @@ from .const import (
     CONF_OFFLINE_ANTHROPIC_API_KEY,
     CONF_OFFLINE_ANTHROPIC_MODEL,
     CONF_OFFLINE_API_KEY,
+    CONF_OFFLINE_BACKEND,
     CONF_OFFLINE_FALLBACK_PROVIDERS,
     CONF_OFFLINE_GOOGLE_API_KEY,
     CONF_OFFLINE_GOOGLE_MODEL,
@@ -42,6 +43,7 @@ from .const import (
     CONF_OFFLINE_OPENAI_API_KEY,
     CONF_OFFLINE_OPENAI_MODEL,
     CONF_OFFLINE_PROVIDER,
+    CONF_TENSORZERO_FUNCTION_NAME,
     CONF_OLLAMA_URL,
     CONF_PROMPT,
     CONF_RECOMMENDED,
@@ -51,7 +53,9 @@ from .const import (
     DEFAULT_OLLAMA_URL,
     DEFAULT_TITLE,
     DOMAIN,
+    OFFLINE_BACKENDS,
     OFFLINE_PROVIDERS,
+    OFFLINE_BACKEND_AUTO,
     PROVIDER_NONE,
     PROVIDER_OLLAMA,
     PROVIDER_OPENAI,
@@ -217,6 +221,8 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
                     user_input.pop(CONF_OFFLINE_API_KEY, None)
                 if not user_input.get(CONF_OFFLINE_FALLBACK_PROVIDERS):
                     user_input.pop(CONF_OFFLINE_FALLBACK_PROVIDERS, None)
+                if not user_input.get(CONF_TENSORZERO_FUNCTION_NAME):
+                    user_input.pop(CONF_TENSORZERO_FUNCTION_NAME, None)
 
                 for field in _PROVIDER_API_KEY_FIELD_MAP.values():
                     if not user_input.get(field):
@@ -231,6 +237,8 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
                     user_input.pop(CONF_OFFLINE_MODEL, None)
                     user_input.pop(CONF_OLLAMA_URL, None)
                     user_input.pop(CONF_OFFLINE_FALLBACK_PROVIDERS, None)
+                    user_input.pop(CONF_OFFLINE_BACKEND, None)
+                    user_input.pop(CONF_TENSORZERO_FUNCTION_NAME, None)
                     for field in _PROVIDER_API_KEY_FIELD_MAP.values():
                         user_input.pop(field, None)
                     for field in _PROVIDER_MODEL_FIELD_MAP.values():
@@ -327,6 +335,31 @@ def _build_conversation_schema(
         return schema
 
     # Offline provider options
+    backend_options = [
+        SelectOptionDict(label=b.replace("_", " ").title(), value=b)
+        for b in OFFLINE_BACKENDS
+    ]
+    schema[vol.Optional(
+        CONF_OFFLINE_BACKEND,
+        description={
+            "suggested_value": options.get(CONF_OFFLINE_BACKEND, OFFLINE_BACKEND_AUTO)
+        },
+        default=OFFLINE_BACKEND_AUTO,
+    )] = SelectSelector(
+        SelectSelectorConfig(
+            mode=SelectSelectorMode.DROPDOWN,
+            options=backend_options,
+        )
+    )
+
+    schema[vol.Optional(
+        CONF_TENSORZERO_FUNCTION_NAME,
+        description={
+            "suggested_value": options.get(CONF_TENSORZERO_FUNCTION_NAME, "chat")
+        },
+        default="chat",
+    )] = str
+
     provider_options = [
         SelectOptionDict(label=p.title(), value=p)
         for p in OFFLINE_PROVIDERS

@@ -44,15 +44,22 @@ Hub.
 
 All offline settings are in the integration's **Conversation Options** form.
 
-1. Set **Offline LLM Provider** (primary provider)
-2. Set **Offline fallback provider order** (providers to try if primary fails)
-3. Add provider credentials in the same form:
+1. Set **Offline backend**:
+   - `auto` (prefers TensorZero if installed, otherwise OpenAI-compatible)
+   - `openai_compat` (direct OpenAI-compatible HTTP providers)
+   - `tensorzero` (TensorZero embedded gateway only)
+2. (Optional) Set **TensorZero function** (default: `chat`)
+3. Set **Offline LLM Provider** (primary provider for OpenAI-compatible mode)
+4. Set **Offline fallback provider order** (providers to try if primary fails)
+5. Add provider credentials in the same form:
    - **OpenAI API Key** / **OpenAI Model**
    - **Google API Key** / **Google Model**
    - **Anthropic API Key** / **Anthropic Model**
    - **Ollama Model** and **Ollama URL**
 
 Notes:
+- TensorZero mode requires the `tensorzero` Python package and a valid `TENSORZERO_CONFIG_PATH` environment variable.
+- In TensorZero mode, provider routing/fallback comes from your TensorZero TOML config.
 - The fallback list is ordered. The integration tries providers in order.
 - If provider-specific keys/models are set, they take precedence.
 - Legacy shared fields (**Offline LLM API Key**, **Offline LLM Model**) are still supported for backward compatibility.

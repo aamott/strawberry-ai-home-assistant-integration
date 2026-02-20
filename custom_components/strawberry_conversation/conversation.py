@@ -30,9 +30,11 @@ from .const import (
 from .hub_client import HubAuthError, HubConnectionError, StrawberryHubClient
 from .local_agent import (
     fallback_providers_from_options,
+    offline_backend_from_options,
     provider_key_map_from_options,
     provider_model_map_from_options,
     run_local_agent_loop,
+    tensorzero_function_name_from_options,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -328,6 +330,8 @@ class StrawberryConversationEntity(
             fallback_providers=fallback_providers_from_options(options),
             provider_api_keys=provider_key_map_from_options(options),
             provider_models=provider_model_map_from_options(options),
+            offline_backend=offline_backend_from_options(options),
+            tensorzero_function_name=tensorzero_function_name_from_options(options),
             max_iterations=MAX_TOOL_ITERATIONS,
         )
 
