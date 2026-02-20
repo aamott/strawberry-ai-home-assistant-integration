@@ -60,7 +60,7 @@ OFFLINE_BACKENDS = [
 DEFAULT_MODELS = {
     PROVIDER_GOOGLE: "gemini-2.5-flash-lite",
     PROVIDER_OPENAI: "gpt-4o-mini",
-    PROVIDER_ANTHROPIC: "claude-sonnet-4-20250514",
+    PROVIDER_ANTHROPIC: "claude-haiku-4-5",
     PROVIDER_OLLAMA: "llama3.2:3b",
 }
 

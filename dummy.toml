@@ -1,0 +1,10 @@
+
+[gateway]
+
+[models.my_openai]
+provider = "openai"
+model_name = "gpt-4o-mini"
+
+[models.my_google]
+provider = "google"
+model_name = "gemini-2.5-flash-lite"

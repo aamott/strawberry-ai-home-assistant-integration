@@ -54,7 +54,6 @@ All offline settings are in the integration's **Conversation Options** form.
 5. Add provider credentials in the same form:
    - **OpenAI API Key** / **OpenAI Model**
    - **Google API Key** / **Google Model**
-   - **Anthropic API Key** / **Anthropic Model**
    - **Ollama Model** and **Ollama URL**
 
 Notes:
@@ -104,7 +103,7 @@ and can only control HA entities via the native Assist API.
 - Home Assistant 2024.7.0+
 - Strawberry Hub running and accessible on the network
 - A registered device token from the Hub
-- API keys for any cloud offline providers you configure (OpenAI/Google/Anthropic)
+- API keys for any cloud offline providers you configure (OpenAI/Google)
 
 ## Development
 

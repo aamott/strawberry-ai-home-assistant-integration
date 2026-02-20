@@ -1,16 +1,16 @@
 """Local agent loop for offline fallback (Phase 2).
 
 This module runs a local tool-capable chat loop when the Hub is offline.
-It uses an OpenAI-compatible chat-completions interface (OpenAI, Gemini's
-compat endpoint, or Ollama) and executes Home Assistant Assist tools through
-``chat_log.async_add_assistant_content``.
+When the ``tensorzero`` package is available, it dynamically builds an
+embedded TensorZero gateway from HA UI settings and routes all cloud
+providers (OpenAI, Google, Anthropic) through it.  Falls back to direct
+httpx calls only when TensorZero is unavailable or for Ollama-only chains.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import TYPE_CHECKING, Any, Awaitable, Callable
 
 import httpx
@@ -23,25 +23,31 @@ except Exception:  # pragma: no cover
     AsyncTensorZeroGateway = None  # type: ignore[assignment]
 
 from .const import (
-    CONF_OFFLINE_BACKEND,
     CONF_OFFLINE_ANTHROPIC_API_KEY,
     CONF_OFFLINE_ANTHROPIC_MODEL,
+    CONF_OFFLINE_BACKEND,
     CONF_OFFLINE_FALLBACK_PROVIDERS,
     CONF_OFFLINE_GOOGLE_API_KEY,
     CONF_OFFLINE_GOOGLE_MODEL,
     CONF_OFFLINE_OLLAMA_MODEL,
     CONF_OFFLINE_OPENAI_API_KEY,
     CONF_OFFLINE_OPENAI_MODEL,
+    CONF_TENSORZERO_FUNCTION_NAME,
     DEFAULT_MODELS,
     DEFAULT_OLLAMA_URL,
     OFFLINE_BACKEND_AUTO,
+    OFFLINE_BACKEND_OPENAI_COMPAT,
     OFFLINE_BACKEND_TENSORZERO,
     PROVIDER_ANTHROPIC,
     PROVIDER_GOOGLE,
     PROVIDER_NONE,
     PROVIDER_OLLAMA,
     PROVIDER_OPENAI,
-    CONF_TENSORZERO_FUNCTION_NAME,
+)
+from .tz_config import (
+    build_credentials,
+    effective_provider_chain as _effective_tz_chain,
+    get_or_build_gateway,
 )
 
 if TYPE_CHECKING:
@@ -67,7 +73,6 @@ type RequestCompletionCallable = Callable[
 ]
 
 logger = logging.getLogger(__name__)
-_tensorzero_gateway: AsyncTensorZeroGateway | None = None
 
 
 def _build_provider_request_context(
@@ -289,54 +294,39 @@ def _extract_message_from_tz_response(response: Any) -> dict[str, Any]:
     return message
 
 
-def _resolve_tensorzero_config_path() -> str:
-    """Resolve TensorZero config path from environment.
-
-    Uses ``TENSORZERO_CONFIG_PATH``. This avoids hardcoding deployment-specific
-    paths in the integration and lets the host environment provide config.
-    """
-    config_path = os.getenv("TENSORZERO_CONFIG_PATH")
-    if not config_path:
-        raise RuntimeError(
-            "TENSORZERO_CONFIG_PATH is not set; cannot initialize TensorZero backend"
-        )
-    return config_path
-
-
-async def _get_tensorzero_gateway() -> AsyncTensorZeroGateway:
-    """Get or initialize a shared TensorZero embedded gateway."""
-    global _tensorzero_gateway
-    if AsyncTensorZeroGateway is None:
-        raise RuntimeError("tensorzero package is not installed")
-
-    if _tensorzero_gateway is not None:
-        return _tensorzero_gateway
-
-    config_path = _resolve_tensorzero_config_path()
-    _tensorzero_gateway = await AsyncTensorZeroGateway.build_embedded(
-        config_file=config_path,
-        async_setup=True,
-    )
-    return _tensorzero_gateway
-
-
 async def _request_tensorzero_completion(
+    gateway: AsyncTensorZeroGateway,
     messages: list[dict[str, Any]],
     system_prompt: str,
     function_name: str,
+    credentials: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Call TensorZero and normalize output into OpenAI-like shape."""
-    gateway = await _get_tensorzero_gateway()
+    """Call TensorZero embedded gateway and normalize to OpenAI-like shape.
+
+    Args:
+        gateway: Initialized ``AsyncTensorZeroGateway``.
+        messages: Chat messages in OpenAI format.
+        system_prompt: System prompt text.
+        function_name: TensorZero function name.
+        credentials: Dynamic API key credentials.
+
+    Returns:
+        OpenAI-compatible response dict with ``choices[0].message``.
+    """
     tz_input: dict[str, Any] = {
         "messages": [m for m in messages if m.get("role") != "system"]
     }
     if system_prompt:
         tz_input["system"] = system_prompt
 
-    response = await gateway.inference(
-        function_name=function_name,
-        input=tz_input,
-    )
+    kwargs: dict[str, Any] = {
+        "function_name": function_name,
+        "input": tz_input,
+    }
+    if credentials:
+        kwargs["credentials"] = credentials
+
+    response = await gateway.inference(**kwargs)
     return {
         "choices": [
             {
@@ -420,12 +410,6 @@ async def _request_with_provider_fallback(
 ) -> dict[str, Any] | None:
     """Try providers in order until one returns a valid response."""
     for provider in provider_chain:
-        if provider == PROVIDER_ANTHROPIC:
-            logger.warning(
-                "Skipping anthropic fallback provider; not yet implemented in local adapter"
-            )
-            continue
-
         provider_api_key = _resolve_provider_api_key(
             provider,
             legacy_api_key,
@@ -450,6 +434,62 @@ async def _request_with_provider_fallback(
             logger.exception("Offline provider %s request failed", provider)
 
     return None
+
+
+def _should_use_tensorzero(offline_backend: str) -> bool:
+    """Decide whether to use the TensorZero dynamic gateway.
+
+    Args:
+        offline_backend: User-selected backend (auto, openai_compat, tensorzero).
+
+    Returns:
+        True if TZ should be used for this request.
+    """
+    if offline_backend == OFFLINE_BACKEND_OPENAI_COMPAT:
+        return False
+    if offline_backend == OFFLINE_BACKEND_TENSORZERO:
+        if AsyncTensorZeroGateway is None:
+            logger.warning(
+                "TensorZero backend selected but tensorzero package is unavailable; "
+                "falling back to OpenAI-compatible HTTP path"
+            )
+            return False
+        return True
+    # auto: prefer TZ when installed
+    return AsyncTensorZeroGateway is not None
+
+
+def _build_full_key_map(
+    provider_chain: list[str],
+    legacy_api_key: str | None,
+    provider_api_keys: dict[str, str | None] | None,
+) -> dict[str, str | None]:
+    """Build a complete API-key map for every provider in the chain.
+
+    Merges per-provider keys with the legacy shared key fallback.
+    """
+    result: dict[str, str | None] = {}
+    for provider in provider_chain:
+        result[provider] = _resolve_provider_api_key(
+            provider, legacy_api_key, provider_api_keys
+        )
+    return result
+
+
+def _build_full_model_map(
+    provider_chain: list[str],
+    legacy_model: str | None,
+    provider_models: dict[str, str | None] | None,
+) -> dict[str, str]:
+    """Build a complete model map for every provider in the chain.
+
+    Falls back to ``DEFAULT_MODELS`` when no explicit model is configured.
+    """
+    result: dict[str, str] = {}
+    for provider in provider_chain:
+        resolved = _resolve_provider_model(provider, legacy_model, provider_models)
+        result[provider] = resolved or DEFAULT_MODELS.get(provider, "")
+    return result
 
 
 async def run_local_agent_loop(
@@ -508,16 +548,8 @@ async def run_local_agent_loop(
     if request_completion is None:
         request_completion = _request_openai_compatible_completion
 
-    use_tensorzero = offline_backend == OFFLINE_BACKEND_TENSORZERO or (
-        offline_backend == OFFLINE_BACKEND_AUTO and AsyncTensorZeroGateway is not None
-    )
-
-    if use_tensorzero and AsyncTensorZeroGateway is None:
-        logger.warning(
-            "TensorZero backend selected but tensorzero package is unavailable; "
-            "falling back to OpenAI-compatible HTTP path"
-        )
-        use_tensorzero = False
+    # Decide whether to use the TensorZero dynamic gateway.
+    use_tensorzero = _should_use_tensorzero(offline_backend)
 
     if system_prompt and (
         not chat_log.content
@@ -527,20 +559,47 @@ async def run_local_agent_loop(
 
     tools = [_tool_to_openai_schema(tool) for tool in api_instance.tools]
 
+    # Pre-build TZ gateway + credentials once before the loop.
+    tz_gateway = None
+    tz_credentials: dict[str, str] | None = None
+    if use_tensorzero:
+        resolved_keys = _build_full_key_map(provider_chain, offline_api_key, provider_api_keys)
+        resolved_models = _build_full_model_map(provider_chain, offline_model, provider_models)
+        tz_chain = _effective_tz_chain(provider_chain, resolved_keys)
+        if tz_chain:
+            try:
+                tz_gateway = await get_or_build_gateway(
+                    provider_chain=tz_chain,
+                    provider_models=resolved_models,
+                    ollama_url=ollama_url,
+                    tools=tools,
+                    function_name=tensorzero_function_name,
+                )
+                tz_credentials = build_credentials(tz_chain, resolved_keys)
+            except Exception:
+                logger.exception(
+                    "Failed to build TensorZero gateway; falling back to httpx"
+                )
+                tz_gateway = None
+        else:
+            logger.warning("No providers with valid credentials for TensorZero")
+
     for iteration in range(max_iterations):
         logger.debug("Local loop iteration %s", iteration + 1)
         messages = _chat_log_to_model_messages(chat_log)
 
-        if use_tensorzero:
+        if tz_gateway is not None:
             try:
                 raw_response = await _request_tensorzero_completion(
+                    gateway=tz_gateway,
                     messages=messages,
                     system_prompt=system_prompt,
                     function_name=tensorzero_function_name,
+                    credentials=tz_credentials,
                 )
             except Exception:
                 logger.exception(
-                    "TensorZero request failed; falling back to OpenAI-compatible providers"
+                    "TensorZero request failed; falling back to httpx providers"
                 )
                 raw_response = await _request_with_provider_fallback(
                     provider_chain=provider_chain,
@@ -636,8 +695,7 @@ def provider_model_map_from_options(options: dict[str, Any]) -> dict[str, str | 
         PROVIDER_OPENAI: options.get(CONF_OFFLINE_OPENAI_MODEL, DEFAULT_MODELS[PROVIDER_OPENAI]),
         PROVIDER_GOOGLE: options.get(CONF_OFFLINE_GOOGLE_MODEL, DEFAULT_MODELS[PROVIDER_GOOGLE]),
         PROVIDER_ANTHROPIC: options.get(
-            CONF_OFFLINE_ANTHROPIC_MODEL,
-            DEFAULT_MODELS[PROVIDER_ANTHROPIC],
+            CONF_OFFLINE_ANTHROPIC_MODEL, DEFAULT_MODELS[PROVIDER_ANTHROPIC]
         ),
         PROVIDER_OLLAMA: options.get(CONF_OFFLINE_OLLAMA_MODEL, DEFAULT_MODELS[PROVIDER_OLLAMA]),
     }

@@ -547,25 +547,35 @@ class TestLocalAgentLoop(unittest.IsolatedAsyncioTestCase):
     def test_provider_maps_from_options(self) -> None:
         """Options helper functions should parse fallback and provider maps."""
         options = {
-            "offline_fallback_providers": ["google", "ollama"],
+            "offline_fallback_providers": ["google", "anthropic", "ollama"],
             "offline_openai_api_key": "openai-key",
             "offline_google_api_key": "google-key",
+            "offline_anthropic_api_key": "anthropic-key",
             "offline_openai_model": "o-model",
             "offline_google_model": "g-model",
+            "offline_anthropic_model": "a-model",
             "offline_ollama_model": "llama3.2:latest",
         }
 
         self.assertEqual(
             fallback_providers_from_options(options),
-            ["google", "ollama"],
+            ["google", "anthropic", "ollama"],
         )
         self.assertEqual(
             provider_key_map_from_options(options)["openai"],
             "openai-key",
         )
         self.assertEqual(
+            provider_key_map_from_options(options)["anthropic"],
+            "anthropic-key",
+        )
+        self.assertEqual(
             provider_model_map_from_options(options)["google"],
             "g-model",
+        )
+        self.assertEqual(
+            provider_model_map_from_options(options)["anthropic"],
+            "a-model",
         )
         self.assertEqual(
             offline_backend_from_options(options),
@@ -586,6 +596,156 @@ class TestLocalAgentLoop(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tensorzero_function_name_from_options(options), "ha_chat")
         self.assertEqual(offline_backend_from_options({}), "auto")
         self.assertEqual(tensorzero_function_name_from_options({}), "chat")
+
+
+class TestTzConfig(unittest.TestCase):
+    """Tests for dynamic TensorZero configuration generation."""
+
+    def test_build_dynamic_config_creates_toml_and_tools(self) -> None:
+        """build_dynamic_config should write a valid TOML and tool schemas."""
+        from custom_components.strawberry_conversation.tz_config import (
+            build_dynamic_config,
+        )
+
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "HassTurnOn",
+                    "description": "Turn on an entity",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"name": {"type": "string"}},
+                    },
+                },
+            }
+        ]
+
+        config_dir, toml_path = build_dynamic_config(
+            provider_chain=["openai", "google"],
+            provider_models={"openai": "gpt-4o-mini", "google": "gemini-2.5-flash-lite"},
+            ollama_url=None,
+            tools=tools,
+            function_name="chat",
+        )
+
+        import os
+        self.assertTrue(os.path.isfile(toml_path))
+        with open(toml_path) as f:
+            content = f.read()
+
+        # Models defined
+        self.assertIn("[models.openai_model]", content)
+        self.assertIn("[models.google_model]", content)
+        self.assertIn('type = "openai"', content)
+        self.assertIn('type = "google_ai_studio_gemini"', content)
+
+        # Dynamic credentials
+        self.assertIn('api_key_location = "dynamic::openai_api_key"', content)
+        self.assertIn('api_key_location = "dynamic::google_api_key"', content)
+
+        # Tool schema file
+        tool_schema = os.path.join(config_dir, "tools", "HassTurnOn.json")
+        self.assertTrue(os.path.isfile(tool_schema))
+
+        # Function + variants
+        self.assertIn("[functions.chat]", content)
+        self.assertIn("[functions.chat.variants.openai_variant]", content)
+        self.assertIn("[functions.chat.variants.google_variant]", content)
+        self.assertIn("fallback_variants", content)
+
+        # Cleanup
+        import shutil
+        shutil.rmtree(config_dir, ignore_errors=True)
+
+    def test_build_dynamic_config_with_anthropic(self) -> None:
+        """Anthropic provider should produce an 'anthropic' type model."""
+        from custom_components.strawberry_conversation.tz_config import (
+            build_dynamic_config,
+        )
+
+        config_dir, toml_path = build_dynamic_config(
+            provider_chain=["anthropic"],
+            provider_models={"anthropic": "claude-haiku-4-5"},
+            ollama_url=None,
+            tools=[],
+            function_name="chat",
+        )
+
+        with open(toml_path) as f:
+            content = f.read()
+
+        self.assertIn("[models.anthropic_model]", content)
+        self.assertIn('type = "anthropic"', content)
+        self.assertIn('model_name = "claude-haiku-4-5"', content)
+        self.assertIn('api_key_location = "dynamic::anthropic_api_key"', content)
+
+        import shutil
+        shutil.rmtree(config_dir, ignore_errors=True)
+
+    def test_build_dynamic_config_ollama(self) -> None:
+        """Ollama provider should use openai type with api_base and api_key_location=none."""
+        from custom_components.strawberry_conversation.tz_config import (
+            build_dynamic_config,
+        )
+
+        config_dir, toml_path = build_dynamic_config(
+            provider_chain=["ollama"],
+            provider_models={"ollama": "llama3.2:3b"},
+            ollama_url="http://myhost:11434/v1",
+            tools=[],
+            function_name="ha_chat",
+        )
+
+        with open(toml_path) as f:
+            content = f.read()
+
+        self.assertIn('type = "openai"', content)
+        self.assertIn('api_key_location = "none"', content)
+        self.assertIn('api_base = "http://myhost:11434/v1/"', content)
+        self.assertIn("[functions.ha_chat]", content)
+
+        import shutil
+        shutil.rmtree(config_dir, ignore_errors=True)
+
+    def test_effective_provider_chain_filters_missing_keys(self) -> None:
+        """Providers without API keys should be excluded (except Ollama)."""
+        from custom_components.strawberry_conversation.tz_config import (
+            effective_provider_chain,
+        )
+
+        chain = effective_provider_chain(
+            ["openai", "google", "anthropic", "ollama"],
+            {"openai": "key1", "google": None, "anthropic": "key3"},
+        )
+        self.assertEqual(chain, ["openai", "anthropic", "ollama"])
+
+    def test_build_credentials(self) -> None:
+        """build_credentials should map dynamic keys to actual API key values."""
+        from custom_components.strawberry_conversation.tz_config import (
+            build_credentials,
+        )
+
+        creds = build_credentials(
+            ["openai", "anthropic", "ollama"],
+            {"openai": "sk-123", "anthropic": "ant-456"},
+        )
+        self.assertEqual(creds, {
+            "openai_api_key": "sk-123",
+            "anthropic_api_key": "ant-456",
+        })
+
+    def test_config_hash_changes_with_different_inputs(self) -> None:
+        """Config hash should change when inputs differ."""
+        from custom_components.strawberry_conversation.tz_config import (
+            _compute_config_hash,
+        )
+
+        h1 = _compute_config_hash(["openai"], {"openai": "gpt-4o"}, "", ["tool1"], "chat")
+        h2 = _compute_config_hash(["openai"], {"openai": "gpt-4o-mini"}, "", ["tool1"], "chat")
+        h3 = _compute_config_hash(["openai"], {"openai": "gpt-4o"}, "", ["tool1"], "chat")
+        self.assertNotEqual(h1, h2)
+        self.assertEqual(h1, h3)
 
 
 if __name__ == "__main__":
