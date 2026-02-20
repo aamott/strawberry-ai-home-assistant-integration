@@ -1,175 +1,277 @@
+"""Unit tests for Strawberry conversation routing logic.
+
+These tests run without a Home Assistant runtime by creating a minimal mock
+module tree before importing the integration module.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import os
 import sys
-import asyncio
-import unittest
-from unittest.mock import MagicMock, AsyncMock, patch
-import json
 import types
+import unittest
+from unittest.mock import AsyncMock, MagicMock
 
-# --- MOCKS FOR HOME ASSISTANT ---
-# We must mock these BEFORE importing any integration code
 
-# 1. Create module objects
-mock_hass = types.ModuleType("homeassistant")
-mock_components = types.ModuleType("homeassistant.components")
-mock_conversation = types.ModuleType("homeassistant.components.conversation")
-mock_config_entries = types.ModuleType("homeassistant.config_entries")
-mock_const = types.ModuleType("homeassistant.const")
-mock_core = types.ModuleType("homeassistant.core")
-mock_helpers = types.ModuleType("homeassistant.helpers")
-mock_entity_platform = types.ModuleType("homeassistant.helpers.entity_platform")
+# Ensure integration root is importable as top-level package path.
+TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
+INTEGRATION_ROOT = os.path.dirname(TESTS_DIR)
+if INTEGRATION_ROOT not in sys.path:
+    sys.path.insert(0, INTEGRATION_ROOT)
 
-# 2. Register them in sys.modules
-sys.modules["homeassistant"] = mock_hass
-sys.modules["homeassistant.components"] = mock_components
-sys.modules["homeassistant.components.conversation"] = mock_conversation
-sys.modules["homeassistant.config_entries"] = mock_config_entries
-sys.modules["homeassistant.const"] = mock_const
-sys.modules["homeassistant.core"] = mock_core
-sys.modules["homeassistant.helpers"] = mock_helpers
-sys.modules["homeassistant.helpers.entity_platform"] = mock_entity_platform
 
-# 3. Link them so 'from homeassistant.components import conversation' works
-mock_hass.components = mock_components
-mock_components.conversation = mock_conversation
-mock_hass.config_entries = mock_config_entries
-mock_hass.const = mock_const
-mock_hass.core = mock_core
-mock_hass.helpers = mock_helpers
-mock_helpers.entity_platform = mock_entity_platform
+def _bootstrap_homeassistant_mocks() -> None:
+    """Create a minimal Home Assistant module graph for isolated tests."""
+    mock_hass = types.ModuleType("homeassistant")
+    mock_components = types.ModuleType("homeassistant.components")
+    mock_conversation = types.ModuleType("homeassistant.components.conversation")
+    mock_config_entries = types.ModuleType("homeassistant.config_entries")
+    mock_const = types.ModuleType("homeassistant.const")
+    mock_core = types.ModuleType("homeassistant.core")
+    mock_helpers = types.ModuleType("homeassistant.helpers")
+    mock_entity_platform = types.ModuleType("homeassistant.helpers.entity_platform")
 
-# Define mock classes/constants used in imports
-class MockConversationEntity:
-    pass
+    sys.modules["homeassistant"] = mock_hass
+    sys.modules["homeassistant.components"] = mock_components
+    sys.modules["homeassistant.components.conversation"] = mock_conversation
+    sys.modules["homeassistant.config_entries"] = mock_config_entries
+    sys.modules["homeassistant.const"] = mock_const
+    sys.modules["homeassistant.core"] = mock_core
+    sys.modules["homeassistant.helpers"] = mock_helpers
+    sys.modules["homeassistant.helpers.entity_platform"] = mock_entity_platform
 
-class MockAbstractConversationAgent:
-    pass
+    mock_hass.components = mock_components
+    mock_components.conversation = mock_conversation
+    mock_hass.config_entries = mock_config_entries
+    mock_hass.const = mock_const
+    mock_hass.core = mock_core
+    mock_hass.helpers = mock_helpers
+    mock_helpers.entity_platform = mock_entity_platform
 
-mock_conversation.ConversationEntity = MockConversationEntity
-mock_conversation.AbstractConversationAgent = MockAbstractConversationAgent
+    class MockConversationEntity:
+        """Minimal base class placeholder."""
 
-class MockChatLog:
-    def __init__(self):
-        self.content = []
-    async def async_provide_llm_data(self, *args, **kwargs): pass
-    def async_add_assistant_content_without_tools(self, content):
-        self.content.append(content)
+    class MockAbstractConversationAgent:
+        """Minimal base class placeholder."""
 
-mock_conversation.ChatLog = MockChatLog
-mock_conversation.ConversationInput = MagicMock()
-mock_conversation.ConversationResult = MagicMock()
-mock_conversation.AssistantContent = lambda agent_id, content: f"AssistantContent(agent_id={agent_id}, content={content})"
-mock_conversation.SystemContent = MagicMock
-mock_conversation.UserContent = MagicMock
-mock_conversation.ToolResultContent = MagicMock
-mock_conversation.ConverseError = Exception # Must be an exception type
-mock_conversation.async_get_result_from_chat_log = MagicMock(return_value="RESULT")
+    @dataclass
+    class AssistantContent:
+        """Simple replacement for HA AssistantContent."""
 
-mock_const.CONF_LLM_HASS_API = "llm_hass_api"
-mock_const.MATCH_ALL = "*"
-class MockPlatform:
-    CONVERSATION = "conversation"
-mock_const.Platform = MockPlatform
+        agent_id: str
+        content: str | None = None
 
-# Fill in other required mocks (used in decorators or base classes if any)
-mock_config_entries.ConfigEntry = MagicMock
-mock_config_entries.ConfigSubentry = MagicMock
-mock_core.HomeAssistant = MagicMock
-mock_entity_platform.AddConfigEntryEntitiesCallback = MagicMock
+    @dataclass
+    class SystemContent:
+        """Simple replacement for HA SystemContent."""
 
-# --- IMPORT INTEGRATION CODE ---
-# Now we can import the integration code safely
-# We assume the test runner adds the correct paths
+        content: str
+
+    @dataclass
+    class UserContent:
+        """Simple replacement for HA UserContent."""
+
+        content: str
+
+    @dataclass
+    class ToolResultContent:
+        """Simple replacement for HA ToolResultContent."""
+
+        tool_result: object
+
+    class MockChatLog:
+        """Simple chat log with required helper methods."""
+
+        def __init__(self) -> None:
+            self.content: list[object] = []
+
+        async def async_provide_llm_data(self, *args, **kwargs) -> None:
+            """No-op for test."""
+
+        def async_add_assistant_content_without_tools(self, content: object) -> None:
+            """Append content to the local log list."""
+            self.content.append(content)
+
+    mock_conversation.ConversationEntity = MockConversationEntity
+    mock_conversation.AbstractConversationAgent = MockAbstractConversationAgent
+    mock_conversation.ChatLog = MockChatLog
+    mock_conversation.ConversationInput = MagicMock()
+    mock_conversation.ConversationResult = MagicMock()
+    mock_conversation.AssistantContent = AssistantContent
+    mock_conversation.SystemContent = SystemContent
+    mock_conversation.UserContent = UserContent
+    mock_conversation.ToolResultContent = ToolResultContent
+    mock_conversation.ConverseError = Exception
+    mock_conversation.async_get_result_from_chat_log = MagicMock(
+        return_value="RESULT"
+    )
+
+    mock_const.CONF_LLM_HASS_API = "llm_hass_api"
+    mock_const.MATCH_ALL = "*"
+
+    class Platform:
+        """Minimal Platform enum-like object used by integration setup."""
+
+        CONVERSATION = "conversation"
+
+    mock_const.Platform = Platform
+
+    mock_config_entries.ConfigEntry = MagicMock
+    mock_config_entries.ConfigSubentry = MagicMock
+    mock_core.HomeAssistant = MagicMock
+    mock_entity_platform.AddConfigEntryEntitiesCallback = MagicMock
+
+
+_bootstrap_homeassistant_mocks()
+
 try:
-    from custom_components.strawberry_conversation.conversation import StrawberryConversationEntity
-    from custom_components.strawberry_conversation.const import DOMAIN
-    from custom_components.strawberry_conversation.hub_client import StrawberryHubClient, HubConnectionError
+    from custom_components.strawberry_conversation.conversation import (
+        StrawberryConversationEntity,
+        _chat_log_to_messages,
+    )
+    from custom_components.strawberry_conversation.hub_client import (
+        HubConnectionError,
+        StrawberryHubClient,
+    )
 except ImportError:
-    # Fallback for when running from root
-    import os
-    sys.path.append(os.path.abspath("ha-integration"))
-    from custom_components.strawberry_conversation.conversation import StrawberryConversationEntity
-    from custom_components.strawberry_conversation.const import DOMAIN
-    from custom_components.strawberry_conversation.hub_client import StrawberryHubClient, HubConnectionError
+    sys.path.append(INTEGRATION_ROOT)
+    from custom_components.strawberry_conversation.conversation import (
+        StrawberryConversationEntity,
+        _chat_log_to_messages,
+    )
+    from custom_components.strawberry_conversation.hub_client import (
+        HubConnectionError,
+        StrawberryHubClient,
+    )
 
 
 class TestStrawberryConversation(unittest.IsolatedAsyncioTestCase):
-    async def asyncSetUp(self):
+    """Behavior tests for online/offline conversation routing."""
+
+    async def asyncSetUp(self) -> None:
+        """Create a fresh entity and dependency mocks for each test."""
         self.mock_config_entry = MagicMock()
         self.mock_subentry = MagicMock()
         self.mock_subentry.subentry_id = "test_subentry"
         self.mock_subentry.data = {"prompt": "test prompt"}
-        
+
         self.mock_hub_client = AsyncMock(spec=StrawberryHubClient)
+        self.mock_hub_client.invalidate_cache = MagicMock()
         self.mock_config_entry.runtime_data = self.mock_hub_client
-        
-        self.entity = StrawberryConversationEntity(self.mock_config_entry, self.mock_subentry)
-        self.entity._attr_unique_id = "test_subentry" # Allow simple id check
+
+        self.entity = StrawberryConversationEntity(
+            self.mock_config_entry,
+            self.mock_subentry,
+        )
         self.entity.entity_id = "conversation.strawberry_ai"
 
-    async def test_online_flow(self):
-        """Test that messages go to Hub when it's online."""
-        # Setup Hub to be online
+    async def test_online_flow_uses_hub_response(self) -> None:
+        """When Hub is available, final assistant text should come from Hub."""
         self.mock_hub_client.health_check.return_value = True
-        
-        # Setup Hub streaming response
-        async def mock_stream(*args, **kwargs):
-            yield {"type": "assistant_message", "content": "Hello from Hub"}
+
+        async def stream_events(*args, **kwargs):
+            yield {"type": "content_delta", "delta": "Hello "}
+            yield {"type": "content_delta", "delta": "from Hub"}
             yield {"type": "done"}
-        self.mock_hub_client.chat_stream = mock_stream
 
-        # Setup input
+        self.mock_hub_client.chat_stream = stream_events
+
         user_input = MagicMock()
-        chat_log = MockChatLog() # Use our simple mock
-        
-        # Run handler
-        await self.entity._async_handle_message(user_input, chat_log)
-        
-        # Verify Hub was checked
-        self.mock_hub_client.health_check.assert_awaited()
-        
-        # Verify result in chat log
-        # The content in our mock is a string repr of AssistantContent
-        self.assertTrue(any("Hello from Hub" in str(c) for c in chat_log.content))
+        user_input.as_llm_context.return_value = {}
+        user_input.extra_system_prompt = None
+        chat_log = sys.modules[
+            "homeassistant.components.conversation"
+        ].ChatLog()
 
-    async def test_offline_flow(self):
-        """Test fallback to local when Hub is offline."""
-        # Setup Hub to be offline
+        result = await self.entity._async_handle_message(user_input, chat_log)
+
+        self.mock_hub_client.health_check.assert_awaited_once()
+        self.assertEqual(result, "RESULT")
+        self.assertTrue(
+            any(
+                getattr(item, "content", "") == "Hello from Hub"
+                for item in chat_log.content
+            )
+        )
+
+    async def test_offline_flow_uses_local_message(self) -> None:
+        """When Hub is offline, entity should return local fallback text."""
         self.mock_hub_client.health_check.return_value = False
-        
-        # Setup input
-        user_input = MagicMock()
-        chat_log = MockChatLog()
-        
-        # Run handler
-        await self.entity._async_handle_message(user_input, chat_log)
-        
-        # Verify Hub checked
-        self.mock_hub_client.health_check.assert_awaited()
-        
-        # Verify offline message in chat log
-        # Look for offline text from conversation.py
-        self.assertTrue(any("unable to reach the Strawberry Hub" in str(c) for c in chat_log.content))
 
-    async def test_active_failure_flow(self):
-        """Test fallback when Hub fails during active request."""
-        # Setup Hub to appear online initially
-        self.mock_hub_client.health_check.return_value = True
-        
-        # But fail during stream
-        self.mock_hub_client.chat_stream.side_effect = HubConnectionError("Connection lost")
-        
-        # Setup input
         user_input = MagicMock()
-        chat_log = MockChatLog()
-        
-        # Run handler
+        user_input.as_llm_context.return_value = {}
+        user_input.extra_system_prompt = None
+        chat_log = sys.modules[
+            "homeassistant.components.conversation"
+        ].ChatLog()
+
         await self.entity._async_handle_message(user_input, chat_log)
-        
-        # Verify cache invalidation was called
-        self.mock_hub_client.invalidate_cache.assert_called()
-        
-        # Verify fallback message
-        self.assertTrue(any("unable to reach the Strawberry Hub" in str(c) for c in chat_log.content))
+
+        self.mock_hub_client.health_check.assert_awaited_once()
+        self.assertTrue(
+            any(
+                "unable to reach the Strawberry Hub"
+                in str(getattr(item, "content", ""))
+                for item in chat_log.content
+            )
+        )
+
+    async def test_stream_failure_invalidates_cache_and_falls_back(self) -> None:
+        """If Hub fails mid-request, cache should invalidate and fallback runs."""
+        self.mock_hub_client.health_check.return_value = True
+
+        async def broken_stream(*args, **kwargs):
+            raise HubConnectionError("connection lost")
+            yield {"type": "done"}
+
+        self.mock_hub_client.chat_stream = broken_stream
+
+        user_input = MagicMock()
+        user_input.as_llm_context.return_value = {}
+        user_input.extra_system_prompt = None
+        chat_log = sys.modules[
+            "homeassistant.components.conversation"
+        ].ChatLog()
+
+        await self.entity._async_handle_message(user_input, chat_log)
+
+        self.mock_hub_client.invalidate_cache.assert_called_once()
+        self.assertTrue(
+            any(
+                "unable to reach the Strawberry Hub"
+                in str(getattr(item, "content", ""))
+                for item in chat_log.content
+            )
+        )
+
+    def test_chat_log_to_messages_mapping(self) -> None:
+        """Chat content types should map to expected Hub message roles."""
+        conversation_mod = sys.modules["homeassistant.components.conversation"]
+        chat_log = conversation_mod.ChatLog()
+        chat_log.content.extend(
+            [
+                conversation_mod.SystemContent(content="sys"),
+                conversation_mod.UserContent(content="hello"),
+                conversation_mod.AssistantContent(
+                    agent_id="conversation.strawberry_ai",
+                    content="hi",
+                ),
+                conversation_mod.ToolResultContent(tool_result={"ok": True}),
+            ]
+        )
+
+        messages = _chat_log_to_messages(chat_log)
+        self.assertEqual(
+            messages,
+            [
+                {"role": "system", "content": "sys"},
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi"},
+                {"role": "tool", "content": "{'ok': True}"},
+            ],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
