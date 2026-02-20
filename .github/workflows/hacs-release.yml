@@ -1,0 +1,60 @@
+name: HACS Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate release metadata
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate tag matches manifest version
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+
+          MANIFEST_VERSION=$(python - <<'PY'
+          import json
+          from pathlib import Path
+
+          manifest = Path("custom_components/strawberry_conversation/manifest.json")
+          data = json.loads(manifest.read_text())
+          print(data["version"])
+          PY
+          )
+
+          if [[ "$VERSION" != "$MANIFEST_VERSION" ]]; then
+            echo "Tag version ($VERSION) does not match manifest version ($MANIFEST_VERSION)"
+            exit 1
+          fi
+
+      - name: Validate HACS metadata exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f hacs.json
+
+  release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
