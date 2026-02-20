@@ -82,6 +82,7 @@ def _bootstrap_homeassistant_modules() -> None:
         tool_name: str
         tool_args: dict
         id: str = "tool-id"
+        external: bool = False
 
     mock_llm.ToolInput = ToolInput
     mock_llm.ulid_now = lambda: "ulid-test"

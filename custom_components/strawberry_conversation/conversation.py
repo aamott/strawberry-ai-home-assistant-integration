@@ -8,12 +8,14 @@ is unreachable.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from homeassistant.components import conversation
 from homeassistant.components.conversation import ChatLog
 from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import CONF_LLM_HASS_API, MATCH_ALL
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import llm
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .const import (
@@ -166,16 +168,19 @@ class StrawberryConversationEntity(
         """Route the conversation through the Strawberry Hub.
 
         Streams SSE events from the Hub and reconstructs the response
-        into the HA ChatLog.
+        into the HA ChatLog.  Hub-executed tool calls are recorded as
+        external tool calls so the HA conversation UI can display them
+        without attempting local re-execution.
 
         Args:
             user_input: The user's conversation input.
             chat_log: The chat log to populate with the response.
         """
-        # Convert chat log to Hub message format
         messages = _chat_log_to_messages(chat_log)
 
         final_content = ""
+        # Accumulate tool calls between tool_call_started and tool_call_result
+        pending_tool_calls: list[dict[str, Any]] = []
 
         async for event in self._hub_client.chat_stream(
             messages=messages,
@@ -187,6 +192,12 @@ class StrawberryConversationEntity(
                 delta = event.get("delta", "")
                 if delta:
                     final_content += delta
+
+            elif event_type == "tool_call_started":
+                pending_tool_calls.append(event)
+
+            elif event_type == "tool_call_result":
+                self._record_hub_tool_result(chat_log, event, pending_tool_calls)
 
             elif event_type == "assistant_message":
                 content = event.get("content", "")
@@ -217,6 +228,67 @@ class StrawberryConversationEntity(
                     content=ERROR_GETTING_RESPONSE,
                 )
             )
+
+    def _record_hub_tool_result(
+        self,
+        chat_log: ChatLog,
+        result_event: dict[str, Any],
+        pending_tool_calls: list[dict[str, Any]],
+    ) -> None:
+        """Record a Hub-executed tool call and its result in the ChatLog.
+
+        Finds the matching ``tool_call_started`` event, writes an
+        ``AssistantContent`` with the external tool call, then appends the
+        ``ToolResultContent``.  This gives HA's conversation UI visibility
+        into what the Hub's agent loop did.
+
+        Args:
+            chat_log: The chat log to append to.
+            result_event: The ``tool_call_result`` SSE event dict.
+            pending_tool_calls: Accumulated ``tool_call_started`` events.
+        """
+        tool_call_id = result_event.get("tool_call_id", "")
+        tool_name = result_event.get("tool_name", "")
+
+        # Pop the matching started event (if any)
+        started_event: dict[str, Any] | None = None
+        for i, tc in enumerate(pending_tool_calls):
+            if tc.get("tool_call_id") == tool_call_id:
+                started_event = pending_tool_calls.pop(i)
+                break
+
+        tool_args = (started_event or {}).get("arguments", {})
+
+        # Record the assistant's tool call as an external call
+        tool_input = llm.ToolInput(
+            tool_name=tool_name,
+            tool_args=tool_args if isinstance(tool_args, dict) else {},
+            id=tool_call_id,
+            external=True,
+        )
+        chat_log.async_add_assistant_content_without_tools(
+            conversation.AssistantContent(
+                agent_id=self.entity_id,
+                content=None,
+                tool_calls=[tool_input],
+            )
+        )
+
+        # Record the tool result
+        success = result_event.get("success", False)
+        if success:
+            tool_result = {"result": result_event.get("result", "")}
+        else:
+            tool_result = {"error": result_event.get("error", "unknown error")}
+
+        chat_log.async_add_assistant_content_without_tools(
+            conversation.ToolResultContent(
+                agent_id=self.entity_id,
+                tool_call_id=tool_call_id,
+                tool_name=tool_name,
+                tool_result=tool_result,
+            )
+        )
 
     def _add_error_response(self, chat_log: ChatLog) -> None:
         """Add an error response to the chat log.

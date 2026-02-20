@@ -153,6 +153,7 @@ def _bootstrap_homeassistant_mocks() -> None:
         tool_name: str
         tool_args: dict
         id: str = "tool-id"
+        external: bool = False
 
     mock_llm.ToolInput = ToolInput
     mock_llm.ulid_now = lambda: "ulid-test"
@@ -241,6 +242,74 @@ class TestStrawberryConversation(unittest.IsolatedAsyncioTestCase):
                 for item in chat_log.content
             )
         )
+
+    async def test_online_flow_records_hub_tool_calls(self) -> None:
+        """Hub tool_call_started/result events should appear in ChatLog."""
+        self.mock_hub_client.health_check.return_value = True
+
+        async def stream_events(*args, **kwargs):
+            yield {
+                "type": "tool_call_started",
+                "tool_call_id": "tc_1",
+                "tool_name": "search_skills",
+                "arguments": {"query": "lights"},
+            }
+            yield {
+                "type": "tool_call_result",
+                "tool_call_id": "tc_1",
+                "tool_name": "search_skills",
+                "success": True,
+                "result": "HomeAssistantSkill",
+                "error": None,
+            }
+            yield {"type": "content_delta", "delta": "Found it!"}
+            yield {"type": "done"}
+
+        self.mock_hub_client.chat_stream = stream_events
+
+        user_input = MagicMock()
+        user_input.as_llm_context.return_value = {}
+        user_input.extra_system_prompt = None
+        chat_log = sys.modules[
+            "homeassistant.components.conversation"
+        ].ChatLog()
+
+        await self.entity._async_handle_message(user_input, chat_log)
+
+        # Should contain: AssistantContent with external tool call,
+        # ToolResultContent, and final AssistantContent with text
+        conversation_mod = sys.modules["homeassistant.components.conversation"]
+
+        tool_call_items = [
+            item
+            for item in chat_log.content
+            if isinstance(item, conversation_mod.AssistantContent)
+            and getattr(item, "tool_calls", None)
+        ]
+        self.assertEqual(len(tool_call_items), 1)
+        tc = tool_call_items[0].tool_calls[0]
+        self.assertEqual(tc.tool_name, "search_skills")
+        self.assertTrue(tc.external)
+
+        tool_result_items = [
+            item
+            for item in chat_log.content
+            if isinstance(item, conversation_mod.ToolResultContent)
+        ]
+        self.assertEqual(len(tool_result_items), 1)
+        self.assertEqual(tool_result_items[0].tool_name, "search_skills")
+        self.assertEqual(
+            tool_result_items[0].tool_result, {"result": "HomeAssistantSkill"}
+        )
+
+        # Final text response
+        text_items = [
+            item
+            for item in chat_log.content
+            if isinstance(item, conversation_mod.AssistantContent)
+            and getattr(item, "content", None)
+        ]
+        self.assertTrue(any("Found it!" in (i.content or "") for i in text_items))
 
     async def test_offline_flow_uses_local_message(self) -> None:
         """When Hub is offline, entity should return local fallback text."""
