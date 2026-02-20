@@ -16,8 +16,17 @@ from homeassistant.const import CONF_LLM_HASS_API, MATCH_ALL
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .const import CONF_PROMPT, DOMAIN
+from .const import (
+    CONF_OFFLINE_API_KEY,
+    CONF_OFFLINE_MODEL,
+    CONF_OFFLINE_PROVIDER,
+    CONF_OLLAMA_URL,
+    CONF_PROMPT,
+    DOMAIN,
+    MAX_TOOL_ITERATIONS,
+)
 from .hub_client import HubAuthError, HubConnectionError, StrawberryHubClient
+from .local_agent import run_local_agent_loop
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -224,25 +233,40 @@ class StrawberryConversationEntity(
         """Run a local agent loop when the Hub is offline.
 
         Uses the HA Assist API tools that were already loaded into
-        the chat_log by async_provide_llm_data. For Phase 1 (MVP),
-        this is a simple pass-through that acknowledges offline status.
-
-        Phase 2 will add TensorZero embedded gateway for full local
-        agent loop capability.
+        the chat_log by async_provide_llm_data.
 
         Args:
             chat_log: The chat log with LLM data already provided.
         """
-        # Phase 1: Return a helpful offline message
-        # Phase 2: Will use TensorZero embedded gateway + HA Assist tools
+        options = self._subentry.data
+        local_response = await run_local_agent_loop(
+            chat_log=chat_log,
+            api_instance=chat_log.llm_api,
+            system_prompt=options.get(CONF_PROMPT, ""),
+            agent_id=self.entity_id,
+            offline_provider=options.get(CONF_OFFLINE_PROVIDER, "none"),
+            offline_api_key=options.get(CONF_OFFLINE_API_KEY),
+            offline_model=options.get(CONF_OFFLINE_MODEL),
+            ollama_url=options.get(CONF_OLLAMA_URL),
+            max_iterations=MAX_TOOL_ITERATIONS,
+        )
+
+        if local_response:
+            chat_log.async_add_assistant_content_without_tools(
+                conversation.AssistantContent(
+                    agent_id=self.entity_id,
+                    content=local_response,
+                )
+            )
+            return
+
         chat_log.async_add_assistant_content_without_tools(
             conversation.AssistantContent(
                 agent_id=self.entity_id,
                 content=(
                     "I'm currently unable to reach the Strawberry Hub. "
-                    "Offline mode with local LLM fallback is not yet "
-                    "configured. Please check that the Hub is running "
-                    "and try again."
+                    "Local offline mode could not complete your request. "
+                    "Please verify offline provider settings and try again."
                 ),
             )
         )

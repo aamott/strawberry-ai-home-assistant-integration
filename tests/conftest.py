@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import sys
 import types
+from dataclasses import dataclass
 from unittest.mock import MagicMock
 
 
@@ -39,6 +40,7 @@ def _bootstrap_homeassistant_modules() -> None:
     mock_core = types.ModuleType("homeassistant.core")
     mock_helpers = types.ModuleType("homeassistant.helpers")
     mock_entity_platform = types.ModuleType("homeassistant.helpers.entity_platform")
+    mock_llm = types.ModuleType("homeassistant.helpers.llm")
 
     sys.modules["homeassistant"] = mock_hass
     sys.modules["homeassistant.components"] = mock_components
@@ -48,6 +50,7 @@ def _bootstrap_homeassistant_modules() -> None:
     sys.modules["homeassistant.core"] = mock_core
     sys.modules["homeassistant.helpers"] = mock_helpers
     sys.modules["homeassistant.helpers.entity_platform"] = mock_entity_platform
+    sys.modules["homeassistant.helpers.llm"] = mock_llm
 
     mock_hass.components = mock_components
     mock_components.conversation = mock_conversation
@@ -56,6 +59,7 @@ def _bootstrap_homeassistant_modules() -> None:
     mock_hass.core = mock_core
     mock_hass.helpers = mock_helpers
     mock_helpers.entity_platform = mock_entity_platform
+    mock_helpers.llm = mock_llm
 
     class Platform:
         """Minimal enum-like placeholder for HA platform constants."""
@@ -70,6 +74,17 @@ def _bootstrap_homeassistant_modules() -> None:
     mock_config_entries.ConfigSubentry = MagicMock
     mock_core.HomeAssistant = MagicMock
     mock_entity_platform.AddConfigEntryEntitiesCallback = MagicMock
+
+    @dataclass(slots=True)
+    class ToolInput:
+        """Minimal ToolInput used by the local agent adapter tests."""
+
+        tool_name: str
+        tool_args: dict
+        id: str = "tool-id"
+
+    mock_llm.ToolInput = ToolInput
+    mock_llm.ulid_now = lambda: "ulid-test"
 
 
 _ensure_integration_root_on_path()
