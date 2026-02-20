@@ -1,0 +1,12 @@
+# Editor
+.vscode/
+.windsurf/
+.cursor/
+
+venv/
+.venv/
+*.db
+
+# python
+__pycache__/
+*.pyc
