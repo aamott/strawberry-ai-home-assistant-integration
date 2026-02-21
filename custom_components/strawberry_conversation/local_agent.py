@@ -640,7 +640,7 @@ async def run_local_agent_loop(
             logger.warning("No providers with valid credentials for TensorZero")
 
     for iteration in range(max_iterations):
-        logger.debug("Local loop iteration %s", iteration + 1)
+        logger.debug("Local loop iteration %d / %d", iteration + 1, max_iterations)
         messages = _chat_log_to_model_messages(chat_log)
 
         if tz_gateway is not None:
@@ -654,7 +654,9 @@ async def run_local_agent_loop(
                 )
             except Exception:
                 logger.exception(
-                    "TensorZero request failed; falling back to httpx providers"
+                    "TensorZero request failed on iteration %d; "
+                    "falling back to httpx providers",
+                    iteration + 1,
                 )
                 raw_response = await _request_with_provider_fallback(
                     provider_chain=provider_chain,
@@ -680,13 +682,21 @@ async def run_local_agent_loop(
                 request_completion=request_completion,
             )
         if raw_response is None:
-            logger.warning("All configured offline providers failed")
+            logger.warning(
+                "All offline providers failed on iteration %d "
+                "(chain=%s). Cannot continue agent loop.",
+                iteration + 1,
+                provider_chain,
+            )
             return None
 
         try:
             message = _extract_openai_message(raw_response)
         except ValueError:
-            logger.exception("Offline provider response was malformed")
+            logger.exception(
+                "Offline provider returned malformed response on iteration %d",
+                iteration + 1,
+            )
             return None
 
         response_content = message.get("content") or ""
@@ -698,6 +708,10 @@ async def run_local_agent_loop(
                 function = raw_tool_call.get("function", {})
                 tool_name = function.get("name", "")
                 if not tool_name:
+                    logger.warning(
+                        "Skipping tool call with empty name: %s",
+                        raw_tool_call,
+                    )
                     continue
 
                 tool_inputs.append(
@@ -710,28 +724,51 @@ async def run_local_agent_loop(
                     )
                 )
 
-            if not tool_inputs and response_content:
-                return response_content
+            # LLM returned tool_calls but none had a valid name
+            if not tool_inputs:
+                if response_content:
+                    return response_content
+                logger.warning(
+                    "LLM returned %d tool call(s) but none had a valid "
+                    "tool_name. Skipping tool execution.",
+                    len(raw_tool_calls),
+                )
+                # Fall through to the empty-content check below
+            else:
+                logger.debug(
+                    "Executing %d tool call(s): %s",
+                    len(tool_inputs),
+                    [t.tool_name for t in tool_inputs],
+                )
+                assistant_content = conversation.AssistantContent(
+                    agent_id=agent_id,
+                    content=response_content or None,
+                    tool_calls=tool_inputs,
+                )
 
-            assistant_content = conversation.AssistantContent(
-                agent_id=agent_id,
-                content=response_content or None,
-                tool_calls=tool_inputs,
-            )
+                async for _ in chat_log.async_add_assistant_content(
+                    assistant_content
+                ):
+                    # HA executes the tools and appends results to chat_log.
+                    pass
+                continue
 
-            async for _ in chat_log.async_add_assistant_content(assistant_content):
-                # The generator handles tool execution and appends results to chat_log.
-                # We only consume it here so the loop can continue with new context.
-                pass
-            continue
-
+        # Final text response — return it
         if response_content.strip():
             return response_content
 
-        logger.debug("Offline provider returned an empty assistant message")
+        logger.warning(
+            "Offline LLM returned empty content on iteration %d "
+            "(no tool calls, no text). Aborting agent loop.",
+            iteration + 1,
+        )
         return None
 
-    logger.warning("Local loop reached max iterations (%s)", max_iterations)
+    logger.warning(
+        "Local agent loop reached max iterations (%d) without a final "
+        "text response.",
+        max_iterations,
+    )
     return None
 
 
