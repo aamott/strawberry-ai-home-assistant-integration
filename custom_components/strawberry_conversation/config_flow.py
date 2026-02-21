@@ -16,6 +16,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_LLM_HASS_API, CONF_NAME
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.data_entry_flow import section
 from homeassistant.helpers import llm
 from homeassistant.helpers.selector import (
     SelectOptionDict,
@@ -33,19 +34,17 @@ from .const import (
     CONF_HUB_URL,
     CONF_OFFLINE_ANTHROPIC_API_KEY,
     CONF_OFFLINE_ANTHROPIC_MODEL,
-    CONF_OFFLINE_API_KEY,
     CONF_OFFLINE_BACKEND,
     CONF_OFFLINE_FALLBACK_PROVIDERS,
     CONF_OFFLINE_GOOGLE_API_KEY,
     CONF_OFFLINE_GOOGLE_MODEL,
-    CONF_OFFLINE_MODEL,
     CONF_OFFLINE_OLLAMA_MODEL,
     CONF_OFFLINE_OPENAI_API_KEY,
     CONF_OFFLINE_OPENAI_MODEL,
     CONF_OFFLINE_PROVIDER,
     CONF_OLLAMA_URL,
     CONF_PROMPT,
-    CONF_RECOMMENDED,
+    CONF_ADVANCED_FALLBACK,
     CONF_TENSORZERO_FUNCTION_NAME,
     DEFAULT_CONVERSATION_NAME,
     DEFAULT_HUB_URL,
@@ -208,21 +207,14 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
             else:
                 options = self._get_reconfigure_subentry().data.copy()
 
-            self.last_rendered_recommended = bool(
-                options.get(CONF_RECOMMENDED, False)
-            )
-        else:
-            # Process submitted form
-            if user_input[CONF_RECOMMENDED] == self.last_rendered_recommended:
+            self.last_rendered_recommended = options.get(CONF_ADVANCED_FALLBACK, False)
+
+        if user_input is not None:
+            # If the user toggled the advanced settings, re-render the form
+            if user_input.get(CONF_ADVANCED_FALLBACK) != self.last_rendered_recommended:
                 # Clean up empty optional fields
                 if not user_input.get(CONF_LLM_HASS_API):
                     user_input.pop(CONF_LLM_HASS_API, None)
-                if not user_input.get(CONF_OFFLINE_API_KEY):
-                    user_input.pop(CONF_OFFLINE_API_KEY, None)
-                if not user_input.get(CONF_OFFLINE_FALLBACK_PROVIDERS):
-                    user_input.pop(CONF_OFFLINE_FALLBACK_PROVIDERS, None)
-                if not user_input.get(CONF_TENSORZERO_FUNCTION_NAME):
-                    user_input.pop(CONF_TENSORZERO_FUNCTION_NAME, None)
 
                 for field in _PROVIDER_API_KEY_FIELD_MAP.values():
                     if not user_input.get(field):
@@ -233,12 +225,9 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
                         user_input.pop(field, None)
 
                 if user_input.get(CONF_OFFLINE_PROVIDER) == PROVIDER_NONE:
-                    user_input.pop(CONF_OFFLINE_API_KEY, None)
-                    user_input.pop(CONF_OFFLINE_MODEL, None)
-                    user_input.pop(CONF_OLLAMA_URL, None)
-                    user_input.pop(CONF_OFFLINE_FALLBACK_PROVIDERS, None)
                     user_input.pop(CONF_OFFLINE_BACKEND, None)
                     user_input.pop(CONF_TENSORZERO_FUNCTION_NAME, None)
+                    user_input.pop(CONF_OFFLINE_FALLBACK_PROVIDERS, None)
                     for field in _PROVIDER_API_KEY_FIELD_MAP.values():
                         user_input.pop(field, None)
                     for field in _PROVIDER_MODEL_FIELD_MAP.values():
@@ -256,7 +245,7 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
                 )
 
             # Toggle changed — re-render with new visibility
-            self.last_rendered_recommended = user_input[CONF_RECOMMENDED]
+            self.last_rendered_recommended = user_input.get(CONF_ADVANCED_FALLBACK, False)
             options = user_input
 
         schema = _build_conversation_schema(
@@ -324,42 +313,21 @@ def _build_conversation_schema(
         SelectSelectorConfig(options=hass_apis, multiple=True)
     )
 
-    # Recommended settings toggle
+    # Advanced Fallback toggle
     schema[vol.Required(
-        CONF_RECOMMENDED,
-        default=options.get(CONF_RECOMMENDED, False),
+        CONF_ADVANCED_FALLBACK,
+        default=options.get(CONF_ADVANCED_FALLBACK, False),
     )] = bool
 
-    # If recommended, skip advanced options
-    if options.get(CONF_RECOMMENDED):
+    # If not advanced, skip advanced options
+    if not options.get(CONF_ADVANCED_FALLBACK):
         return schema
 
-    # Offline provider options
+    # General Offline Routing
     backend_options = [
         SelectOptionDict(label=b.replace("_", " ").title(), value=b)
         for b in OFFLINE_BACKENDS
     ]
-    schema[vol.Optional(
-        CONF_OFFLINE_BACKEND,
-        description={
-            "suggested_value": options.get(CONF_OFFLINE_BACKEND, OFFLINE_BACKEND_AUTO)
-        },
-        default=OFFLINE_BACKEND_AUTO,
-    )] = SelectSelector(
-        SelectSelectorConfig(
-            mode=SelectSelectorMode.DROPDOWN,
-            options=backend_options,
-        )
-    )
-
-    schema[vol.Optional(
-        CONF_TENSORZERO_FUNCTION_NAME,
-        description={
-            "suggested_value": options.get(CONF_TENSORZERO_FUNCTION_NAME, "chat")
-        },
-        default="chat",
-    )] = str
-
     provider_options = [
         SelectOptionDict(label=p.title(), value=p)
         for p in OFFLINE_PROVIDERS
@@ -369,128 +337,151 @@ def _build_conversation_schema(
         for p in OFFLINE_PROVIDERS
         if p != PROVIDER_NONE
     ]
-    schema[vol.Optional(
-        CONF_OFFLINE_PROVIDER,
-        description={
-            "suggested_value": options.get(CONF_OFFLINE_PROVIDER, PROVIDER_NONE)
-        },
-        default=PROVIDER_NONE,
-    )] = SelectSelector(
-        SelectSelectorConfig(
-            mode=SelectSelectorMode.DROPDOWN,
-            options=provider_options,
-        )
+
+    schema[vol.Required("routing_section")] = section(
+        vol.Schema({
+            vol.Optional(
+                CONF_OFFLINE_BACKEND,
+                description={
+                    "suggested_value": options.get(CONF_OFFLINE_BACKEND, OFFLINE_BACKEND_AUTO)
+                },
+                default=OFFLINE_BACKEND_AUTO,
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    mode=SelectSelectorMode.DROPDOWN,
+                    options=backend_options,
+                )
+            ),
+            vol.Optional(
+                CONF_TENSORZERO_FUNCTION_NAME,
+                description={
+                    "suggested_value": options.get(CONF_TENSORZERO_FUNCTION_NAME, "chat")
+                },
+                default="chat",
+            ): str,
+            vol.Optional(
+                CONF_OFFLINE_PROVIDER,
+                description={
+                    "suggested_value": options.get(CONF_OFFLINE_PROVIDER, PROVIDER_NONE)
+                },
+                default=PROVIDER_NONE,
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    mode=SelectSelectorMode.DROPDOWN,
+                    options=provider_options,
+                )
+            ),
+            vol.Optional(
+                CONF_OFFLINE_FALLBACK_PROVIDERS,
+                description={
+                    "suggested_value": options.get(CONF_OFFLINE_FALLBACK_PROVIDERS, [])
+                },
+            ): SelectSelector(
+                SelectSelectorConfig(
+                    mode=SelectSelectorMode.DROPDOWN,
+                    options=fallback_provider_options,
+                    multiple=True,
+                )
+            ),
+        }),
+        {"collapsed": False}
     )
 
-    schema[vol.Optional(
-        CONF_OFFLINE_FALLBACK_PROVIDERS,
-        description={
-            "suggested_value": options.get(CONF_OFFLINE_FALLBACK_PROVIDERS, [])
-        },
-    )] = SelectSelector(
-        SelectSelectorConfig(
-            mode=SelectSelectorMode.DROPDOWN,
-            options=fallback_provider_options,
-            multiple=True,
-        )
-    )
-
-    # Legacy shared API key/model remain visible for backward compatibility.
-    schema[vol.Optional(
-        CONF_OFFLINE_API_KEY,
-        description={
-            "suggested_value": options.get(CONF_OFFLINE_API_KEY, "")
-        },
-    )] = TextSelector(
-        TextSelectorConfig(type=TextSelectorType.PASSWORD)
-    )
-
-    schema[vol.Optional(
-        CONF_OFFLINE_MODEL,
-        description={
-            "suggested_value": options.get(CONF_OFFLINE_MODEL, "")
-        },
-    )] = str
-
-    schema[vol.Optional(
-        CONF_OFFLINE_OPENAI_API_KEY,
-        description={
-            "suggested_value": options.get(CONF_OFFLINE_OPENAI_API_KEY, "")
-        },
-    )] = TextSelector(
-        TextSelectorConfig(type=TextSelectorType.PASSWORD)
-    )
-    schema[vol.Optional(
-        CONF_OFFLINE_OPENAI_MODEL,
-        description={
-            "suggested_value": options.get(
+    schema[vol.Required("openai_section")] = section(
+        vol.Schema({
+            vol.Optional(
+                CONF_OFFLINE_OPENAI_API_KEY,
+                description={
+                    "suggested_value": options.get(CONF_OFFLINE_OPENAI_API_KEY, "")
+                },
+            ): TextSelector(
+                TextSelectorConfig(type=TextSelectorType.PASSWORD)
+            ),
+            vol.Optional(
                 CONF_OFFLINE_OPENAI_MODEL,
-                DEFAULT_MODELS[PROVIDER_OPENAI],
-            )
-        },
-        default=DEFAULT_MODELS[PROVIDER_OPENAI],
-    )] = str
-
-    schema[vol.Optional(
-        CONF_OFFLINE_GOOGLE_API_KEY,
-        description={
-            "suggested_value": options.get(CONF_OFFLINE_GOOGLE_API_KEY, "")
-        },
-    )] = TextSelector(
-        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                description={
+                    "suggested_value": options.get(
+                        CONF_OFFLINE_OPENAI_MODEL,
+                        DEFAULT_MODELS[PROVIDER_OPENAI],
+                    )
+                },
+                default=DEFAULT_MODELS[PROVIDER_OPENAI],
+            ): str,
+        }),
+        {"collapsed": True}
     )
-    schema[vol.Optional(
-        CONF_OFFLINE_GOOGLE_MODEL,
-        description={
-            "suggested_value": options.get(
+
+    schema[vol.Required("google_section")] = section(
+        vol.Schema({
+            vol.Optional(
+                CONF_OFFLINE_GOOGLE_API_KEY,
+                description={
+                    "suggested_value": options.get(CONF_OFFLINE_GOOGLE_API_KEY, "")
+                },
+            ): TextSelector(
+                TextSelectorConfig(type=TextSelectorType.PASSWORD)
+            ),
+            vol.Optional(
                 CONF_OFFLINE_GOOGLE_MODEL,
-                DEFAULT_MODELS[PROVIDER_GOOGLE],
-            )
-        },
-        default=DEFAULT_MODELS[PROVIDER_GOOGLE],
-    )] = str
-
-    schema[vol.Optional(
-        CONF_OFFLINE_ANTHROPIC_API_KEY,
-        description={
-            "suggested_value": options.get(CONF_OFFLINE_ANTHROPIC_API_KEY, "")
-        },
-    )] = TextSelector(
-        TextSelectorConfig(type=TextSelectorType.PASSWORD)
+                description={
+                    "suggested_value": options.get(
+                        CONF_OFFLINE_GOOGLE_MODEL,
+                        DEFAULT_MODELS[PROVIDER_GOOGLE],
+                    )
+                },
+                default=DEFAULT_MODELS[PROVIDER_GOOGLE],
+            ): str,
+        }),
+        {"collapsed": True}
     )
-    schema[vol.Optional(
-        CONF_OFFLINE_ANTHROPIC_MODEL,
-        description={
-            "suggested_value": options.get(
+
+    schema[vol.Required("anthropic_section")] = section(
+        vol.Schema({
+            vol.Optional(
+                CONF_OFFLINE_ANTHROPIC_API_KEY,
+                description={
+                    "suggested_value": options.get(CONF_OFFLINE_ANTHROPIC_API_KEY, "")
+                },
+            ): TextSelector(
+                TextSelectorConfig(type=TextSelectorType.PASSWORD)
+            ),
+            vol.Optional(
                 CONF_OFFLINE_ANTHROPIC_MODEL,
-                DEFAULT_MODELS[PROVIDER_ANTHROPIC],
-            )
-        },
-        default=DEFAULT_MODELS[PROVIDER_ANTHROPIC],
-    )] = str
+                description={
+                    "suggested_value": options.get(
+                        CONF_OFFLINE_ANTHROPIC_MODEL,
+                        DEFAULT_MODELS[PROVIDER_ANTHROPIC],
+                    )
+                },
+                default=DEFAULT_MODELS[PROVIDER_ANTHROPIC],
+            ): str,
+        }),
+        {"collapsed": True}
+    )
 
-    schema[vol.Optional(
-        CONF_OFFLINE_OLLAMA_MODEL,
-        description={
-            "suggested_value": options.get(
-                CONF_OFFLINE_OLLAMA_MODEL,
-                DEFAULT_MODELS[PROVIDER_OLLAMA],
-            )
-        },
-        default=DEFAULT_MODELS[PROVIDER_OLLAMA],
-    )] = str
-
-    schema[vol.Optional(
-        CONF_OLLAMA_URL,
-        description={
-            "suggested_value": options.get(
+    schema[vol.Required("ollama_section")] = section(
+        vol.Schema({
+            vol.Optional(
                 CONF_OLLAMA_URL,
-                DEFAULT_OLLAMA_URL,
-            )
-        },
-        default=DEFAULT_OLLAMA_URL,
-    )] = TextSelector(
-        TextSelectorConfig(type=TextSelectorType.URL)
+                description={
+                    "suggested_value": options.get(CONF_OLLAMA_URL, DEFAULT_OLLAMA_URL)
+                },
+                default=DEFAULT_OLLAMA_URL,
+            ): TextSelector(
+                TextSelectorConfig(type=TextSelectorType.URL)
+            ),
+            vol.Optional(
+                CONF_OFFLINE_OLLAMA_MODEL,
+                description={
+                    "suggested_value": options.get(
+                        CONF_OFFLINE_OLLAMA_MODEL,
+                        DEFAULT_MODELS[PROVIDER_OLLAMA],
+                    )
+                },
+                default=DEFAULT_MODELS[PROVIDER_OLLAMA],
+            ): str,
+        }),
+        {"collapsed": True}
     )
 
     return schema
