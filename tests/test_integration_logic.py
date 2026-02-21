@@ -934,6 +934,165 @@ class TestSimplifyMessagesForTensorzero(unittest.TestCase):
                 f"Unexpected keys in {msg}",
             )
 
+class TestConversationHistoryPreservation(unittest.IsolatedAsyncioTestCase):
+    """Tests that chat_log history is preserved across turns (Finding 1)."""
+
+    async def asyncSetUp(self) -> None:
+        """Create a fresh entity with dependency mocks."""
+        self.mock_config_entry = MagicMock()
+        self.mock_subentry = MagicMock()
+        self.mock_subentry.subentry_id = "test_subentry"
+        self.mock_subentry.data = {"prompt": "test prompt"}
+
+        self.mock_hub_client = AsyncMock(spec=StrawberryHubClient)
+        self.mock_hub_client.invalidate_cache = MagicMock()
+        self.mock_config_entry.runtime_data = self.mock_hub_client
+
+        self.entity = StrawberryConversationEntity(
+            self.mock_config_entry,
+            self.mock_subentry,
+        )
+        self.entity.entity_id = "conversation.strawberry_ai"
+
+    async def test_prior_history_preserved_after_handle_message(self) -> None:
+        """Multi-turn content should survive through _async_handle_message."""
+        conversation_mod = sys.modules["homeassistant.components.conversation"]
+        self.mock_hub_client.health_check.return_value = False
+
+        chat_log = conversation_mod.ChatLog()
+        # Simulate prior conversation history
+        chat_log.content.extend([
+            conversation_mod.SystemContent(content="You are helpful"),
+            conversation_mod.UserContent(content="Turn on the lights"),
+            conversation_mod.AssistantContent(
+                agent_id="conversation.strawberry_ai",
+                content="Done, I turned on the lights.",
+            ),
+            conversation_mod.UserContent(content="Now turn them off"),
+        ])
+
+        user_input = MagicMock()
+        user_input.as_llm_context.return_value = {}
+        user_input.extra_system_prompt = None
+
+        await self.entity._async_handle_message(user_input, chat_log)
+
+        # Prior AssistantContent should still be present (not truncated)
+        assistant_items = [
+            item for item in chat_log.content
+            if isinstance(item, conversation_mod.AssistantContent)
+        ]
+        # At minimum: the prior "Done, I turned on..." + the offline fallback reply
+        self.assertGreaterEqual(len(assistant_items), 2)
+        self.assertTrue(
+            any("turned on the lights" in (getattr(i, "content", "") or "")
+                for i in assistant_items)
+        )
+
+
+class TestTzResponseParserRobustness(unittest.TestCase):
+    """Tests for robust TZ response parsing (Finding 2)."""
+
+    def test_string_content_treated_as_plain_text(self) -> None:
+        """If TZ response 'content' is a string, return it as text."""
+        from custom_components.strawberry_conversation.local_agent import (
+            _extract_message_from_tz_response,
+        )
+
+        response = {"content": "Hello world"}
+        result = _extract_message_from_tz_response(response)
+        self.assertEqual(result["role"], "assistant")
+        self.assertEqual(result["content"], "Hello world")
+
+    def test_none_content_returns_empty(self) -> None:
+        """If TZ response 'content' is None, return empty content."""
+        from custom_components.strawberry_conversation.local_agent import (
+            _extract_message_from_tz_response,
+        )
+
+        response = {"content": None}
+        result = _extract_message_from_tz_response(response)
+        self.assertEqual(result["role"], "assistant")
+        self.assertEqual(result["content"], "")
+
+    def test_missing_content_key_returns_empty(self) -> None:
+        """If TZ response has no 'content' key at all, return empty."""
+        from custom_components.strawberry_conversation.local_agent import (
+            _extract_message_from_tz_response,
+        )
+
+        response = {"id": "some-id"}
+        result = _extract_message_from_tz_response(response)
+        self.assertEqual(result["role"], "assistant")
+        self.assertEqual(result["content"], "")
+
+    def test_empty_response_object(self) -> None:
+        """Completely empty / non-dict response should not crash."""
+        from custom_components.strawberry_conversation.local_agent import (
+            _extract_message_from_tz_response,
+        )
+
+        result = _extract_message_from_tz_response(None)
+        self.assertEqual(result["role"], "assistant")
+
+    def test_normal_list_content_still_works(self) -> None:
+        """Standard list content should still be parsed correctly."""
+        from custom_components.strawberry_conversation.local_agent import (
+            _extract_message_from_tz_response,
+        )
+
+        response = {
+            "content": [{"type": "text", "text": "Hello from TZ"}]
+        }
+        result = _extract_message_from_tz_response(response)
+        self.assertEqual(result["content"], "Hello from TZ")
+
+
+class TestAsyncResetGatewayCache(unittest.IsolatedAsyncioTestCase):
+    """Tests for TZ gateway cleanup (Finding 4)."""
+
+    async def test_close_called_on_cached_gateway(self) -> None:
+        """async_reset_gateway_cache should call .close() on the gateway."""
+        from custom_components.strawberry_conversation import tz_config
+
+        mock_gateway = AsyncMock()
+        # Set module-level cached gateway
+        tz_config._cached_gateway = mock_gateway
+        tz_config._cached_config_hash = "abc"
+        tz_config._cached_config_dir = None
+
+        await tz_config.async_reset_gateway_cache()
+
+        mock_gateway.close.assert_awaited_once()
+        self.assertIsNone(tz_config._cached_gateway)
+        self.assertEqual(tz_config._cached_config_hash, "")
+
+    async def test_no_error_when_gateway_is_none(self) -> None:
+        """async_reset_gateway_cache should not crash if no gateway exists."""
+        from custom_components.strawberry_conversation import tz_config
+
+        tz_config._cached_gateway = None
+        tz_config._cached_config_hash = ""
+        tz_config._cached_config_dir = None
+
+        # Should not raise
+        await tz_config.async_reset_gateway_cache()
+        self.assertIsNone(tz_config._cached_gateway)
+
+    async def test_close_error_is_handled_gracefully(self) -> None:
+        """If gateway.close() raises, it should be caught and logged."""
+        from custom_components.strawberry_conversation import tz_config
+
+        mock_gateway = AsyncMock()
+        mock_gateway.close.side_effect = RuntimeError("close failed")
+        tz_config._cached_gateway = mock_gateway
+        tz_config._cached_config_hash = "abc"
+        tz_config._cached_config_dir = None
+
+        # Should not raise despite .close() failure
+        await tz_config.async_reset_gateway_cache()
+        self.assertIsNone(tz_config._cached_gateway)
+
 
 if __name__ == "__main__":
     unittest.main()

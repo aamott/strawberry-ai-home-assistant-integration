@@ -134,19 +134,9 @@ class StrawberryConversationEntity(
         Returns:
             ConversationResult with the assistant's response.
         """
-        # Truncate chat_log to only the current session's turn
-        # Assist by default persists the same chat_log across all conversations
-        # For now, we want each Assist session to be independent.
-        # We keep the SystemContent if it's already there, and the latest UserContent.
-        system_content = next((c for c in chat_log.content if isinstance(c, conversation.SystemContent)), None)
-        latest_user_content = next((c for c in reversed(chat_log.content) if isinstance(c, conversation.UserContent)), None)
-        
-        chat_log.content.clear()
-        if system_content:
-            chat_log.content.append(system_content)
-        if latest_user_content:
-            chat_log.content.append(latest_user_content)
-
+        # NOTE: We intentionally preserve the full chat_log.content here.
+        # HA's ChatLog manages per-session history; clearing it would break
+        # multi-turn context for both Hub and local agent paths.
         options = self._subentry.data
 
         # Provide HA LLM data (system prompt, Assist API tools, exposed entities)

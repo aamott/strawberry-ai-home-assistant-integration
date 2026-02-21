@@ -379,8 +379,34 @@ async def get_or_build_gateway(
     return _cached_gateway
 
 
+async def async_reset_gateway_cache() -> None:
+    """Close and reset the cached gateway (async — use during HA unload).
+
+    Properly awaits ``_cached_gateway.close()`` to release network
+    connections before clearing the reference.
+    """
+    global _cached_gateway, _cached_config_hash, _cached_config_dir  # noqa: PLW0603
+
+    if _cached_gateway is not None:
+        try:
+            await _cached_gateway.close()
+        except Exception:
+            logger.warning("Error closing TensorZero gateway", exc_info=True)
+
+    if _cached_config_dir and os.path.isdir(_cached_config_dir):
+        shutil.rmtree(_cached_config_dir, ignore_errors=True)
+
+    _cached_gateway = None
+    _cached_config_hash = ""
+    _cached_config_dir = None
+
+
 def reset_gateway_cache() -> None:
-    """Reset the cached gateway (useful for tests and reconfiguration)."""
+    """Reset the cached gateway synchronously (for tests and simple cleanup).
+
+    Does NOT call ``.close()`` — use ``async_reset_gateway_cache()`` in
+    async contexts to properly release connections.
+    """
     global _cached_gateway, _cached_config_hash, _cached_config_dir  # noqa: PLW0603
 
     if _cached_config_dir and os.path.isdir(_cached_config_dir):

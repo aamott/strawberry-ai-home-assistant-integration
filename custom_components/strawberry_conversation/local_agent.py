@@ -330,26 +330,49 @@ def _extract_tool_call_from_tz_block(block: Any) -> dict[str, Any] | None:
 
 
 def _extract_message_from_tz_response(response: Any) -> dict[str, Any]:
-    """Convert TensorZero response object/dict to OpenAI-like message dict."""
-    if isinstance(response, dict):
-        content_blocks = response.get("content") or []
-    elif hasattr(response, "content"):
-        content_blocks = getattr(response, "content", []) or []
-    else:
-        content_blocks = []
+    """Convert TensorZero response object/dict to OpenAI-like message dict.
 
-    content = ""
-    tool_calls: list[dict[str, Any]] = []
-    for block in content_blocks:
-        content += _extract_text_from_tz_block(block)
-        tool_call = _extract_tool_call_from_tz_block(block)
-        if tool_call:
-            tool_calls.append(tool_call)
+    Handles unexpected response shapes (None, strings, missing keys)
+    gracefully by falling back to an empty assistant message.
+    """
+    try:
+        if isinstance(response, dict):
+            content_blocks = response.get("content") or []
+        elif hasattr(response, "content"):
+            content_blocks = getattr(response, "content", []) or []
+        else:
+            content_blocks = []
 
-    message: dict[str, Any] = {"role": "assistant", "content": content}
-    if tool_calls:
-        message["tool_calls"] = tool_calls
-    return message
+        # Guard against non-iterable content (e.g. a plain string)
+        if not isinstance(content_blocks, list):
+            logger.warning(
+                "TZ response 'content' is not a list (got %s); "
+                "treating as plain text",
+                type(content_blocks).__name__,
+            )
+            return {
+                "role": "assistant",
+                "content": str(content_blocks) if content_blocks else "",
+            }
+
+        content = ""
+        tool_calls: list[dict[str, Any]] = []
+        for block in content_blocks:
+            content += _extract_text_from_tz_block(block)
+            tool_call = _extract_tool_call_from_tz_block(block)
+            if tool_call:
+                tool_calls.append(tool_call)
+
+        message: dict[str, Any] = {"role": "assistant", "content": content}
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+        return message
+
+    except Exception:
+        logger.exception(
+            "Failed to parse TZ response; returning empty assistant message"
+        )
+        return {"role": "assistant", "content": ""}
 
 
 async def _request_tensorzero_completion(

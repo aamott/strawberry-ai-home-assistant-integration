@@ -99,6 +99,11 @@ async def async_unload_entry(
     client: StrawberryHubClient = entry.runtime_data
     await client.close()
 
+    # Close the TensorZero gateway to release any pooled connections
+    from .tz_config import async_reset_gateway_cache
+
+    await async_reset_gateway_cache()
+
     # Unload platforms
     if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         hass.data[DOMAIN].pop(entry.entry_id)
