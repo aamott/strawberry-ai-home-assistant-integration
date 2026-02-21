@@ -44,7 +44,6 @@ from .const import (
     CONF_OFFLINE_PROVIDER,
     CONF_OLLAMA_URL,
     CONF_PROMPT,
-    CONF_ADVANCED_FALLBACK,
     CONF_TENSORZERO_FUNCTION_NAME,
     DEFAULT_CONVERSATION_NAME,
     DEFAULT_HUB_URL,
@@ -183,8 +182,6 @@ class StrawberryConfigFlow(ConfigFlow, domain=DOMAIN):
 class ConversationSubentryFlow(ConfigSubentryFlow):
     """Flow for managing conversation agent subentries."""
 
-    last_rendered_recommended = False
-
     @property
     def _is_new(self) -> bool:
         """Return if this is a new subentry."""
@@ -196,7 +193,6 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
         """Set conversation options.
 
         Handles both new subentry creation and reconfiguration.
-        Shows/hides advanced options based on the 'recommended' toggle.
         """
         errors: dict[str, str] = {}
 
@@ -207,46 +203,38 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
             else:
                 options = self._get_reconfigure_subentry().data.copy()
 
-            self.last_rendered_recommended = options.get(CONF_ADVANCED_FALLBACK, False)
-
         if user_input is not None:
-            # If the user toggled the advanced settings, re-render the form
-            if user_input.get(CONF_ADVANCED_FALLBACK) != self.last_rendered_recommended:
-                # Clean up empty optional fields
-                if not user_input.get(CONF_LLM_HASS_API):
-                    user_input.pop(CONF_LLM_HASS_API, None)
+            # Clean up empty optional fields
+            if not user_input.get(CONF_LLM_HASS_API):
+                user_input.pop(CONF_LLM_HASS_API, None)
 
+            for field in _PROVIDER_API_KEY_FIELD_MAP.values():
+                if not user_input.get(field):
+                    user_input.pop(field, None)
+
+            for field in _PROVIDER_MODEL_FIELD_MAP.values():
+                if not user_input.get(field):
+                    user_input.pop(field, None)
+
+            if user_input.get(CONF_OFFLINE_PROVIDER) == PROVIDER_NONE:
+                user_input.pop(CONF_OFFLINE_BACKEND, None)
+                user_input.pop(CONF_TENSORZERO_FUNCTION_NAME, None)
+                user_input.pop(CONF_OFFLINE_FALLBACK_PROVIDERS, None)
                 for field in _PROVIDER_API_KEY_FIELD_MAP.values():
-                    if not user_input.get(field):
-                        user_input.pop(field, None)
-
+                    user_input.pop(field, None)
                 for field in _PROVIDER_MODEL_FIELD_MAP.values():
-                    if not user_input.get(field):
-                        user_input.pop(field, None)
+                    user_input.pop(field, None)
 
-                if user_input.get(CONF_OFFLINE_PROVIDER) == PROVIDER_NONE:
-                    user_input.pop(CONF_OFFLINE_BACKEND, None)
-                    user_input.pop(CONF_TENSORZERO_FUNCTION_NAME, None)
-                    user_input.pop(CONF_OFFLINE_FALLBACK_PROVIDERS, None)
-                    for field in _PROVIDER_API_KEY_FIELD_MAP.values():
-                        user_input.pop(field, None)
-                    for field in _PROVIDER_MODEL_FIELD_MAP.values():
-                        user_input.pop(field, None)
-
-                if self._is_new:
-                    return self.async_create_entry(
-                        title=user_input.pop(CONF_NAME),
-                        data=user_input,
-                    )
-                return self.async_update_and_abort(
-                    self._get_entry(),
-                    self._get_reconfigure_subentry(),
+            if self._is_new:
+                return self.async_create_entry(
+                    title=user_input.pop(CONF_NAME),
                     data=user_input,
                 )
-
-            # Toggle changed — re-render with new visibility
-            self.last_rendered_recommended = user_input.get(CONF_ADVANCED_FALLBACK, False)
-            options = user_input
+            return self.async_update_and_abort(
+                self._get_entry(),
+                self._get_reconfigure_subentry(),
+                data=user_input,
+            )
 
         schema = _build_conversation_schema(
             self.hass, self._is_new, options
@@ -473,16 +461,6 @@ def _build_conversation_schema(
     )] = SelectSelector(
         SelectSelectorConfig(options=hass_apis, multiple=True)
     )
-
-    # Advanced Fallback toggle
-    schema[vol.Required(
-        CONF_ADVANCED_FALLBACK,
-        default=options.get(CONF_ADVANCED_FALLBACK, False),
-    )] = bool
-
-    # If not advanced, skip advanced options
-    if not options.get(CONF_ADVANCED_FALLBACK):
-        return schema
 
     # General Offline Routing
     backend_options = [

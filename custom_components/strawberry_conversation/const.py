@@ -23,7 +23,6 @@ CONF_OFFLINE_BACKEND = "offline_backend"
 CONF_TENSORZERO_FUNCTION_NAME = "tensorzero_function_name"
 CONF_OLLAMA_URL = "ollama_url"
 CONF_PROMPT = "prompt"
-CONF_ADVANCED_FALLBACK = "advanced_fallback"
 CONF_RECOMMENDED = "recommended"  # Keep for backward compatibility if needed in old configs
 
 # Defaults
