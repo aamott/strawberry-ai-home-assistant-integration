@@ -18,6 +18,8 @@ import shutil
 import tempfile
 from typing import Any
 
+import tomli_w
+
 from .const import (
     DEFAULT_MODELS,
     DEFAULT_OLLAMA_URL,
@@ -87,129 +89,97 @@ def _compute_config_hash(
     return hashlib.sha256(data.encode()).hexdigest()
 
 
-# ── TOML section builders ───────────────────────────────────────────────────
+# ── TOML dictionary builders ────────────────────────────────────────────────
 
-
-def _build_model_section(
+def _add_model_to_config(
+    config: dict[str, Any],
     provider: str,
     model_name: str,
     ollama_url: str | None = None,
-) -> str:
-    """Build TOML ``[models.*]`` + ``[models.*.providers.*]`` for one provider.
-
-    Args:
-        provider: HA provider key (e.g. ``openai``, ``google``).
-        model_name: LLM model identifier.
-        ollama_url: Base URL when provider is Ollama.
-
-    Returns:
-        Multi-line TOML fragment.
-    """
+) -> None:
+    """Add a provider model to the TensorZero config dictionary."""
     tz_type = _PROVIDER_TZ_TYPE[provider]
     model_id = f"{provider}_model"
     provider_id = f"{provider}_provider"
 
-    lines = [
-        f"[models.{model_id}]",
-        f'routing = ["{provider_id}"]',
-        "",
-        f"[models.{model_id}.providers.{provider_id}]",
-        f'type = "{tz_type}"',
-        f'model_name = "{_escape_toml_string(model_name)}"',
-    ]
+    if "models" not in config:
+        config["models"] = {}
+
+    model_config: dict[str, Any] = {
+        "routing": [provider_id],
+        "providers": {
+            provider_id: {
+                "type": tz_type,
+                "model_name": model_name,
+            }
+        }
+    }
 
     if provider == PROVIDER_OLLAMA:
         # Ollama needs no API key and a custom base URL.
-        lines.append('api_key_location = "none"')
+        model_config["providers"][provider_id]["api_key_location"] = "none"
         base = (ollama_url or DEFAULT_OLLAMA_URL).rstrip("/")
         if not base.endswith("/v1"):
             base += "/v1"
-        lines.append(f'api_base = "{base}/"')
+        model_config["providers"][provider_id]["api_base"] = f"{base}/"
     elif provider in _PROVIDER_CREDENTIAL_KEY:
         cred_key = _PROVIDER_CREDENTIAL_KEY[provider]
-        lines.append(f'api_key_location = "dynamic::{cred_key}"')
+        model_config["providers"][provider_id]["api_key_location"] = f"dynamic::{cred_key}"
 
-    lines.append("")
-    return "\n".join(lines)
+    config["models"][model_id] = model_config
 
 
-def _build_tool_section(
+def _add_tool_to_config(
+    config: dict[str, Any],
     tool_name: str,
     description: str,
     schema_path: str,
-) -> str:
-    """Build TOML ``[tools.*]`` section for one HA tool.
-
-    Args:
-        tool_name: Tool identifier.
-        description: Human-readable tool description.
-        schema_path: Absolute path to the JSON-Schema parameter file.
-
-    Returns:
-        Multi-line TOML fragment.
-    """
-    return (
-        f'[tools."{_escape_toml_string(tool_name)}"]\n'
-        f'description = "{_escape_toml_string(description)}"\n'
-        f'parameters = "{_escape_toml_string(schema_path)}"\n'
-    )
+) -> None:
+    """Add a tool to the TensorZero config dictionary."""
+    if "tools" not in config:
+        config["tools"] = {}
+        
+    config["tools"][tool_name] = {
+        "description": description,
+        "parameters": schema_path,
+    }
 
 
-def _build_function_section(
+def _add_function_to_config(
+    config: dict[str, Any],
     function_name: str,
     provider_chain: list[str],
     tool_names: list[str],
-) -> str:
-    """Build TOML function, variant, and experimentation sections.
+) -> None:
+    """Add function, variant, and experimentation sections to config dictionary."""
+    if "functions" not in config:
+        config["functions"] = {}
 
-    All variants are placed in ``fallback_variants`` for deterministic
-    sequential fallback matching the user-configured provider order.
-
-    Args:
-        function_name: TensorZero function name (e.g. ``chat``).
-        provider_chain: Ordered providers.
-        tool_names: Tool names to attach to the function.
-
-    Returns:
-        Multi-line TOML fragment.
-    """
-    tools_str = ", ".join(f'"{t}"' for t in tool_names)
-
-    lines = [
-        f"[functions.{function_name}]",
-        'type = "chat"',
-    ]
+    func_config: dict[str, Any] = {
+        "type": "chat",
+        "variants": {},
+    }
     if tool_names:
-        lines.append(f"tools = [{tools_str}]")
-    lines.append("")
+        func_config["tools"] = tool_names
 
     # One variant per provider
     variant_names: list[str] = []
     for provider in provider_chain:
         variant_name = f"{provider}_variant"
         variant_names.append(variant_name)
-        lines.extend(
-            [
-                f"[functions.{function_name}.variants.{variant_name}]",
-                'type = "chat_completion"',
-                f'model = "{provider}_model"',
-                "",
-            ]
-        )
+        func_config["variants"][variant_name] = {
+            "type": "chat_completion",
+            "model": f"{provider}_model",
+        }
 
     # Sequential fallback: all variants in fallback_variants
     if variant_names:
-        fallback_str = ", ".join(f'"{v}"' for v in variant_names)
-        lines.extend(
-            [
-                f"[functions.{function_name}.experimentation]",
-                'type = "uniform"',
-                f"fallback_variants = [{fallback_str}]",
-                "",
-            ]
-        )
+        func_config["experimentation"] = {
+            "type": "uniform",
+            "fallback_variants": variant_names,
+        }
 
-    return "\n".join(lines)
+    config["functions"][function_name] = func_config
 
 
 # ── Public API ───────────────────────────────────────────────────────────────
@@ -274,18 +244,18 @@ def build_dynamic_config(
     tools_dir = os.path.join(config_dir, "tools")
     os.makedirs(tools_dir, exist_ok=True)
 
-    sections: list[str] = [
-        "[gateway]",
-        "observability.enabled = false",
-        "",
-    ]
+    config_dict: dict[str, Any] = {
+        "gateway": {
+            "observability": {
+                "enabled": False
+            }
+        }
+    }
 
-    # Model sections
     for provider in provider_chain:
         model = provider_models.get(provider) or DEFAULT_MODELS.get(provider, "")
-        sections.append(_build_model_section(provider, model, ollama_url))
+        _add_model_to_config(config_dict, provider, model, ollama_url)
 
-    # Tool sections + JSON schema files
     tool_names: list[str] = []
     for tool in tools:
         func = tool.get("function", {})
@@ -299,19 +269,13 @@ def build_dynamic_config(
         with open(schema_path, "w") as fh:
             json.dump(parameters, fh)
 
-        sections.append(
-            _build_tool_section(name, func.get("description", ""), schema_path)
-        )
+        _add_tool_to_config(config_dict, name, func.get("description", ""), schema_path)
 
-    # Function section
-    sections.append(
-        _build_function_section(function_name, provider_chain, tool_names)
-    )
+    _add_function_to_config(config_dict, function_name, provider_chain, tool_names)
 
-    toml_content = "\n".join(sections)
     toml_path = os.path.join(config_dir, "tensorzero.toml")
-    with open(toml_path, "w") as fh:
-        fh.write(toml_content)
+    with open(toml_path, "wb") as fh:
+        tomli_w.dump(config_dict, fh)
 
     logger.debug("Generated dynamic TZ config at %s", toml_path)
     return config_dir, toml_path

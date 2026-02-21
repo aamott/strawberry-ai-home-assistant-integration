@@ -43,6 +43,10 @@ from .const import (
     PROVIDER_NONE,
     PROVIDER_OLLAMA,
     PROVIDER_OPENAI,
+    _OPENAI_COMPAT_CONNECT_TIMEOUT,
+    _OPENAI_COMPAT_READ_TIMEOUT,
+    _OPENAI_COMPAT_WRITE_TIMEOUT,
+    _OPENAI_COMPAT_POOL_TIMEOUT,
 )
 from .tz_config import (
     build_credentials,
@@ -54,11 +58,6 @@ if TYPE_CHECKING:
     from homeassistant.components.conversation import ChatLog
     from homeassistant.helpers.llm import APIInstance
     from homeassistant.helpers.llm import Tool
-
-_OPENAI_COMPAT_CONNECT_TIMEOUT = 5.0
-_OPENAI_COMPAT_READ_TIMEOUT = 60.0
-_OPENAI_COMPAT_WRITE_TIMEOUT = 20.0
-_OPENAI_COMPAT_POOL_TIMEOUT = 5.0
 
 type RequestCompletionCallable = Callable[
     [

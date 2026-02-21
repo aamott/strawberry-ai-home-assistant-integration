@@ -23,7 +23,8 @@ CONF_OFFLINE_BACKEND = "offline_backend"
 CONF_TENSORZERO_FUNCTION_NAME = "tensorzero_function_name"
 CONF_OLLAMA_URL = "ollama_url"
 CONF_PROMPT = "prompt"
-CONF_RECOMMENDED = "recommended"
+CONF_ADVANCED_FALLBACK = "advanced_fallback"
+CONF_RECOMMENDED = "recommended"  # Keep for backward compatibility if needed in old configs
 
 # Defaults
 DEFAULT_HUB_URL = "http://localhost:8000"
@@ -63,6 +64,11 @@ DEFAULT_MODELS = {
     PROVIDER_ANTHROPIC: "claude-haiku-4-5",
     PROVIDER_OLLAMA: "llama3.2:3b",
 }
+
+_OPENAI_COMPAT_CONNECT_TIMEOUT = 5.0
+_OPENAI_COMPAT_READ_TIMEOUT = 60.0
+_OPENAI_COMPAT_WRITE_TIMEOUT = 20.0
+_OPENAI_COMPAT_POOL_TIMEOUT = 5.0
 
 # Timeouts (seconds)
 HUB_CONNECT_TIMEOUT = 2.0
