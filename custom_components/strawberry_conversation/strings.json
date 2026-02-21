@@ -34,40 +34,70 @@
           "data": {
             "name": "Name",
             "prompt": "System Prompt",
-            "llm_hass_api": "Control Home Assistant",
-            "offline_backend": "Offline backend",
-            "tensorzero_function_name": "TensorZero function",
-            "offline_provider": "Offline LLM Provider",
-            "offline_fallback_providers": "Offline fallback provider order",
-            "offline_openai_api_key": "OpenAI API Key",
-            "offline_openai_model": "OpenAI Model",
-            "offline_google_api_key": "Google API Key",
-            "offline_google_model": "Google Model",
-            "offline_anthropic_api_key": "Anthropic API Key",
-            "offline_anthropic_model": "Anthropic Model",
-            "offline_ollama_model": "Ollama Model",
-            "ollama_url": "Ollama URL"
-          },
-          "sections": {
-            "routing_section": {"name": "General Offline Routing"},
-            "openai_section": {"name": "OpenAI Configuration"},
-            "google_section": {"name": "Google Configuration"},
-            "anthropic_section": {"name": "Anthropic Configuration"},
-            "ollama_section": {"name": "Ollama Configuration"}
+            "llm_hass_api": "Control Home Assistant"
           },
           "data_description": {
             "prompt": "Custom instructions for the AI. Supports Home Assistant templates.",
-            "llm_hass_api": "Allow the AI to control exposed Home Assistant entities.",
-            "offline_backend": "Backend used for offline mode: Auto prefers TensorZero when installed; OpenAI-compatible uses direct provider APIs.",
-            "tensorzero_function_name": "The specific function name defined in your TensorZero configuration (e.g., 'chat' or 'ha_chat').",
-            "offline_provider": "Primary LLM provider to use when the Hub is unreachable.",
-            "offline_fallback_providers": "Ordered fallback providers to try if the primary provider fails.",
-            "offline_openai_api_key": "API key used when OpenAI is selected in the offline chain.",
-            "offline_google_model": "Google model for offline mode.",
-            "offline_anthropic_api_key": "API key used when Anthropic is selected in the offline chain.",
-            "offline_anthropic_model": "Anthropic model for offline mode.",
-            "offline_ollama_model": "Ollama model for offline mode.",
-            "ollama_url": "URL for local Ollama OpenAI-compatible endpoint."
+            "llm_hass_api": "Allow the AI to control exposed Home Assistant entities."
+          },
+          "sections": {
+            "routing_section": {
+              "name": "General Offline Routing",
+              "data": {
+                "offline_backend": "Offline backend",
+                "tensorzero_function_name": "TensorZero function",
+                "offline_provider": "Offline LLM Provider",
+                "offline_fallback_providers": "Offline fallback provider order"
+              },
+              "data_description": {
+                "offline_backend": "Backend used for offline mode: Auto prefers TensorZero when installed; OpenAI-compatible uses direct provider APIs.",
+                "tensorzero_function_name": "The specific function name defined in your TensorZero configuration (e.g., 'chat' or 'ha_chat').",
+                "offline_provider": "Primary LLM provider to use when the Hub is unreachable.",
+                "offline_fallback_providers": "Ordered fallback providers to try if the primary provider fails."
+              }
+            },
+            "openai_section": {
+              "name": "OpenAI Configuration",
+              "data": {
+                "offline_openai_api_key": "OpenAI API Key",
+                "offline_openai_model": "OpenAI Model"
+              },
+              "data_description": {
+                "offline_openai_api_key": "API key used when OpenAI is selected in the offline chain."
+              }
+            },
+            "google_section": {
+              "name": "Google Configuration",
+              "data": {
+                "offline_google_api_key": "Google API Key",
+                "offline_google_model": "Google Model"
+              },
+              "data_description": {
+                "offline_google_model": "Google model for offline mode."
+              }
+            },
+            "anthropic_section": {
+              "name": "Anthropic Configuration",
+              "data": {
+                "offline_anthropic_api_key": "Anthropic API Key",
+                "offline_anthropic_model": "Anthropic Model"
+              },
+              "data_description": {
+                "offline_anthropic_api_key": "API key used when Anthropic is selected in the offline chain.",
+                "offline_anthropic_model": "Anthropic model for offline mode."
+              }
+            },
+            "ollama_section": {
+              "name": "Ollama Configuration",
+              "data": {
+                "offline_ollama_model": "Ollama Model",
+                "ollama_url": "Ollama URL"
+              },
+              "data_description": {
+                "offline_ollama_model": "Ollama model for offline mode.",
+                "ollama_url": "URL for local Ollama OpenAI-compatible endpoint."
+              }
+            }
           }
         }
       }
