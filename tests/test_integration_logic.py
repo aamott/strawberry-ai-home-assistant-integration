@@ -604,6 +604,101 @@ class TestLocalAgentLoop(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(tensorzero_function_name_from_options({}), "chat")
 
 
+class TestFlattenSections(unittest.TestCase):
+    """Tests for config flow section flattening."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        """Ensure config_flow HA dependencies are mocked before import."""
+        import types
+
+        # config_flow imports these HA names that aren't in the basic test mocks
+        mock_config_entries = sys.modules["homeassistant.config_entries"]
+        for name in (
+            "ConfigFlow", "ConfigFlowResult", "ConfigSubentryFlow",
+            "SubentryFlowResult",
+        ):
+            if not hasattr(mock_config_entries, name):
+                setattr(mock_config_entries, name, MagicMock())
+
+        mock_const = sys.modules["homeassistant.const"]
+        if not hasattr(mock_const, "CONF_NAME"):
+            mock_const.CONF_NAME = "name"
+
+        mock_core = sys.modules["homeassistant.core"]
+        if not hasattr(mock_core, "callback"):
+            mock_core.callback = lambda f: f
+
+        # data_entry_flow
+        if "homeassistant.data_entry_flow" not in sys.modules:
+            mock_def = types.ModuleType("homeassistant.data_entry_flow")
+            mock_def.section = lambda schema, opts: schema
+            sys.modules["homeassistant.data_entry_flow"] = mock_def
+
+        # selectors
+        if "homeassistant.helpers.selector" not in sys.modules:
+            mock_sel = types.ModuleType("homeassistant.helpers.selector")
+            for name in (
+                "SelectOptionDict", "SelectSelector", "SelectSelectorConfig",
+                "SelectSelectorMode", "TemplateSelector", "TextSelector",
+                "TextSelectorConfig", "TextSelectorType",
+            ):
+                setattr(mock_sel, name, MagicMock())
+            sys.modules["homeassistant.helpers.selector"] = mock_sel
+
+        mock_llm = sys.modules["homeassistant.helpers.llm"]
+        if not hasattr(mock_llm, "async_get_apis"):
+            mock_llm.async_get_apis = MagicMock(return_value=[])
+
+    def test_flatten_sections_merges_nested_dicts(self) -> None:
+        """Section sub-dicts should be promoted to top-level keys."""
+        from custom_components.strawberry_conversation.config_flow import (
+            _flatten_sections,
+        )
+
+        raw = {
+            "prompt": "You are helpful",
+            "routing_section": {
+                "offline_provider": "google",
+                "offline_backend": "auto",
+            },
+            "openai_section": {
+                "offline_openai_api_key": "sk-123",
+                "offline_openai_model": "gpt-4o-mini",
+            },
+            "google_section": {
+                "offline_google_api_key": "gk-456",
+            },
+            "anthropic_section": {},
+            "ollama_section": {
+                "ollama_url": "http://localhost:11434/v1",
+            },
+        }
+
+        flat = _flatten_sections(raw)
+
+        # Non-section key preserved
+        self.assertEqual(flat["prompt"], "You are helpful")
+        # Section keys merged to top level
+        self.assertEqual(flat["offline_provider"], "google")
+        self.assertEqual(flat["offline_backend"], "auto")
+        self.assertEqual(flat["offline_openai_api_key"], "sk-123")
+        self.assertEqual(flat["offline_google_api_key"], "gk-456")
+        self.assertEqual(flat["ollama_url"], "http://localhost:11434/v1")
+        # Section wrapper keys removed
+        self.assertNotIn("routing_section", flat)
+        self.assertNotIn("openai_section", flat)
+
+    def test_flatten_sections_passthrough_when_no_sections(self) -> None:
+        """Data without section keys should pass through unchanged."""
+        from custom_components.strawberry_conversation.config_flow import (
+            _flatten_sections,
+        )
+
+        data = {"offline_provider": "openai", "offline_api_key": "key"}
+        self.assertEqual(_flatten_sections(data), data)
+
+
 class TestTzConfig(unittest.TestCase):
     """Tests for dynamic TensorZero configuration generation."""
 

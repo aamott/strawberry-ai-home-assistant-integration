@@ -78,6 +78,39 @@ _PROVIDER_MODEL_FIELD_MAP = {
     PROVIDER_OLLAMA: CONF_OFFLINE_OLLAMA_MODEL,
 }
 
+# Section keys used by the config flow form that nest sub-dicts in user_input.
+# _flatten_sections() merges these back to the top level before saving.
+SECTION_KEYS = {
+    "routing_section",
+    "openai_section",
+    "google_section",
+    "anthropic_section",
+    "ollama_section",
+}
+
+
+def _flatten_sections(data: dict[str, Any]) -> dict[str, Any]:
+    """Merge section sub-dicts into the top-level dict.
+
+    HA's ``section()`` helper nests form fields under the section key.
+    We flatten them so the stored subentry data uses the same flat keys
+    that ``conversation.py`` and ``local_agent.py`` expect.
+
+    Args:
+        data: Raw ``user_input`` from the config flow form.
+
+    Returns:
+        Dict with section contents promoted to the top level.
+    """
+    flat: dict[str, Any] = {}
+    for key, value in data.items():
+        if key in SECTION_KEYS and isinstance(value, dict):
+            flat.update(value)
+        else:
+            flat[key] = value
+    return flat
+
+
 # Schema for the initial Hub connection step
 STEP_HUB_DATA_SCHEMA = vol.Schema(
     {
@@ -204,6 +237,10 @@ class ConversationSubentryFlow(ConfigSubentryFlow):
                 options = self._get_reconfigure_subentry().data.copy()
 
         if user_input is not None:
+            # Flatten section sub-dicts into the top level so stored
+            # subentry data uses the flat keys expected by conversation.py
+            user_input = _flatten_sections(user_input)
+
             # Clean up empty optional fields
             if not user_input.get(CONF_LLM_HASS_API):
                 user_input.pop(CONF_LLM_HASS_API, None)
