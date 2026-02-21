@@ -1,8 +1,14 @@
 """Strawberry AI conversation agent entity.
 
-Routes user messages to the Strawberry Hub when online, or falls back to a
-local agent loop (TensorZero embedded + HA Assist API tools) when the Hub
-is unreachable.
+Architecture:
+- **Hub online (passthrough)**: User messages are forwarded to the Strawberry
+  Hub, which manages the full agent loop including ALL tool calls (HA Assist
+  tools are exposed to the Hub via MCP).  The HA integration only records
+  the Hub's SSE events (tool calls, results, final text) into the ChatLog.
+- **Hub offline (local agent loop)**: TensorZero calls the LLM directly.
+  If the LLM requests HA Assist tools, those are executed locally via
+  ``chat_log.async_add_assistant_content()``.  Tool results are fed back
+  to TensorZero for the next LLM iteration.
 """
 
 from __future__ import annotations
@@ -177,7 +183,10 @@ class StrawberryConversationEntity(
                 _LOGGER.exception("Local agent loop also failed")
                 self._add_error_response(chat_log)
         except Exception:
-            _LOGGER.exception("Unexpected error in conversation handler")
+            _LOGGER.exception(
+                "Unexpected error in conversation handler — both Hub and "
+                "local agent paths failed"
+            )
             self._add_error_response(chat_log)
 
         return conversation.async_get_result_from_chat_log(user_input, chat_log)
@@ -187,12 +196,12 @@ class StrawberryConversationEntity(
         user_input: conversation.ConversationInput,
         chat_log: ChatLog,
     ) -> None:
-        """Route the conversation through the Strawberry Hub.
+        """Route the conversation through the Strawberry Hub (passthrough).
 
-        Streams SSE events from the Hub and reconstructs the response
-        into the HA ChatLog.  Hub-executed tool calls are recorded as
-        external tool calls so the HA conversation UI can display them
-        without attempting local re-execution.
+        The Hub owns the full agent loop and executes ALL tools — including
+        HA Assist tools exposed via MCP.  This method only streams the Hub's
+        SSE events and records them in the ChatLog so the HA conversation
+        UI can display them.  No local tool execution occurs here.
 
         Args:
             user_input: The user's conversation input.
@@ -331,8 +340,13 @@ class StrawberryConversationEntity(
     async def _handle_locally(self, chat_log: ChatLog) -> None:
         """Run a local agent loop when the Hub is offline.
 
-        Uses the HA Assist API tools that were already loaded into
-        the chat_log by async_provide_llm_data.
+        Uses TensorZero to call the LLM directly.  If the LLM requests
+        HA Assist tools, those are executed locally via the ChatLog's
+        built-in tool pipeline.  Tool results are converted to
+        TensorZero-compatible messages for the next LLM iteration.
+
+        Only used when the Hub is unreachable — the Hub is the primary
+        owner of all tool execution (including HA tools via MCP).
 
         Args:
             chat_log: The chat log with LLM data already provided.

@@ -183,6 +183,56 @@ def _chat_log_to_model_messages(chat_log: ChatLog) -> list[dict[str, Any]]:
     return messages
 
 
+def _simplify_messages_for_tensorzero(
+    messages: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Convert OpenAI-format tool messages to TensorZero-compatible format.
+
+    TensorZero only accepts ``{role, content}`` fields on each message.
+    After HA locally executes an Assist tool (offline mode), the chat log
+    contains OpenAI-style messages with ``role: 'tool'``, ``tool_call_id``,
+    and ``tool_calls`` arrays on assistant messages — none of which TZ
+    understands.  This converter mirrors the spoke's approach
+    (``agent_runner.py``) of folding tool results into plain user messages.
+
+    Args:
+        messages: Messages in OpenAI chat-completion format.
+
+    Returns:
+        Messages using only ``role`` and ``content`` — safe for TensorZero.
+    """
+    simplified: list[dict[str, Any]] = []
+    for msg in messages:
+        role = msg.get("role", "")
+
+        if role == "tool":
+            # Convert tool-result to a user message with a descriptive prefix
+            tool_name = msg.get("name", "unknown_tool")
+            content = msg.get("content", "")
+            simplified.append({
+                "role": "user",
+                "content": (
+                    f"[Tool Result: {tool_name}]\n{content}\n\n"
+                    "[Now respond naturally to the user based on this result. "
+                    "Do not rerun the same tool call again unless the user asks.]"
+                ),
+            })
+            continue
+
+        if role == "assistant":
+            # Strip tool_calls — keep only role + content
+            simplified.append({
+                "role": "assistant",
+                "content": msg.get("content") or "",
+            })
+            continue
+
+        # system, user, etc. — pass through unchanged
+        simplified.append({"role": role, "content": msg.get("content") or ""})
+
+    return simplified
+
+
 async def _request_openai_compatible_completion(
     provider: str,
     api_key: str | None,
@@ -302,6 +352,10 @@ async def _request_tensorzero_completion(
 ) -> dict[str, Any]:
     """Call TensorZero embedded gateway and normalize to OpenAI-like shape.
 
+    TensorZero only accepts ``{role, content}`` fields, so we convert
+    any OpenAI-format tool messages (``role: 'tool'``, ``tool_calls``)
+    to simplified user/assistant messages before calling the gateway.
+
     Args:
         gateway: Initialized ``AsyncTensorZeroGateway``.
         messages: Chat messages in OpenAI format.
@@ -312,8 +366,10 @@ async def _request_tensorzero_completion(
     Returns:
         OpenAI-compatible response dict with ``choices[0].message``.
     """
+    # Convert tool messages to TZ-compatible format, then strip system role
+    tz_messages = _simplify_messages_for_tensorzero(messages)
     tz_input: dict[str, Any] = {
-        "messages": [m for m in messages if m.get("role") != "system"]
+        "messages": [m for m in tz_messages if m.get("role") != "system"]
     }
     if system_prompt:
         tz_input["system"] = system_prompt

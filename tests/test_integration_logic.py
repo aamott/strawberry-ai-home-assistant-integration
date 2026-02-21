@@ -849,5 +849,90 @@ class TestTzConfig(unittest.TestCase):
         self.assertEqual(h1, h3)
 
 
+class TestSimplifyMessagesForTensorzero(unittest.TestCase):
+    """Tests for the TensorZero message format converter."""
+
+    def test_tool_messages_converted_to_user(self) -> None:
+        """role: 'tool' messages should become role: 'user' with a prefix."""
+        from custom_components.strawberry_conversation.local_agent import (
+            _simplify_messages_for_tensorzero,
+        )
+
+        messages = [
+            {"role": "user", "content": "Turn on the lights"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "HassTurnOn",
+                            "arguments": '{"name": "Kitchen"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "name": "HassTurnOn",
+                "content": '{"result": "success"}',
+            },
+        ]
+
+        result = _simplify_messages_for_tensorzero(messages)
+
+        # User message passes through
+        self.assertEqual(result[0]["role"], "user")
+        self.assertEqual(result[0]["content"], "Turn on the lights")
+
+        # Assistant message: tool_calls stripped, only role+content kept
+        self.assertEqual(result[1]["role"], "assistant")
+        self.assertNotIn("tool_calls", result[1])
+
+        # Tool message converted to user with descriptive prefix
+        self.assertEqual(result[2]["role"], "user")
+        self.assertIn("[Tool Result: HassTurnOn]", result[2]["content"])
+        self.assertIn('{"result": "success"}', result[2]["content"])
+
+    def test_system_messages_pass_through(self) -> None:
+        """System and user messages should not be modified."""
+        from custom_components.strawberry_conversation.local_agent import (
+            _simplify_messages_for_tensorzero,
+        )
+
+        messages = [
+            {"role": "system", "content": "You are helpful"},
+            {"role": "user", "content": "Hello"},
+        ]
+        result = _simplify_messages_for_tensorzero(messages)
+
+        self.assertEqual(len(result), 2)
+        self.assertEqual(result[0], {"role": "system", "content": "You are helpful"})
+        self.assertEqual(result[1], {"role": "user", "content": "Hello"})
+
+    def test_no_extra_fields_in_output(self) -> None:
+        """Every output message should only have 'role' and 'content' keys."""
+        from custom_components.strawberry_conversation.local_agent import (
+            _simplify_messages_for_tensorzero,
+        )
+
+        messages = [
+            {"role": "user", "content": "Hi"},
+            {"role": "assistant", "content": "Call tool", "tool_calls": [{"id": "1"}]},
+            {"role": "tool", "tool_call_id": "1", "name": "X", "content": "ok"},
+        ]
+        result = _simplify_messages_for_tensorzero(messages)
+
+        for msg in result:
+            self.assertEqual(
+                set(msg.keys()),
+                {"role", "content"},
+                f"Unexpected keys in {msg}",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
