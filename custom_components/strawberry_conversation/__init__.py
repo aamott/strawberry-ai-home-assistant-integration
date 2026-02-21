@@ -12,13 +12,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
-from .const import CONF_HUB_TOKEN, CONF_HUB_URL, LOGGER
+from .const import CONF_HUB_TOKEN, CONF_HUB_URL, DOMAIN, LOGGER
+from .coordinator import HubStatusCoordinator
 from .hub_client import StrawberryHubClient
 
 _LOGGER = logging.getLogger(__name__)
 
 # Platforms this integration sets up
-PLATFORMS = [Platform.CONVERSATION]
+PLATFORMS = [Platform.CONVERSATION, Platform.BINARY_SENSOR]
 
 # Type alias for config entry with runtime data
 type StrawberryConfigEntry = ConfigEntry[StrawberryHubClient]
@@ -67,9 +68,17 @@ async def async_setup_entry(
     # Store client as runtime data
     entry.runtime_data = client
 
+    # Set up coordinator for connection status
+    coordinator = HubStatusCoordinator(hass, client)
+    await coordinator.async_config_entry_first_refresh()
+
+    hass.data.setdefault(DOMAIN, {})
+    hass.data[DOMAIN][entry.entry_id] = {
+        "coordinator": coordinator,
+    }
+
     # Forward setup to conversation platform
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
-
     return True
 
 
@@ -91,4 +100,6 @@ async def async_unload_entry(
     await client.close()
 
     # Unload platforms
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if unload_ok := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
+        hass.data[DOMAIN].pop(entry.entry_id)
+    return unload_ok

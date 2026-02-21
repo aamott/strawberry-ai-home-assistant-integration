@@ -31,6 +31,7 @@ def _bootstrap_homeassistant_mocks() -> None:
     mock_core = types.ModuleType("homeassistant.core")
     mock_helpers = types.ModuleType("homeassistant.helpers")
     mock_entity_platform = types.ModuleType("homeassistant.helpers.entity_platform")
+    sys.modules["homeassistant.helpers.update_coordinator"] = types.ModuleType("homeassistant.helpers.update_coordinator")
     mock_llm = types.ModuleType("homeassistant.helpers.llm")
 
     sys.modules["homeassistant"] = mock_hass
@@ -41,6 +42,16 @@ def _bootstrap_homeassistant_mocks() -> None:
     sys.modules["homeassistant.core"] = mock_core
     sys.modules["homeassistant.helpers"] = mock_helpers
     sys.modules["homeassistant.helpers.entity_platform"] = mock_entity_platform
+    
+    sys.modules["homeassistant.components.binary_sensor"] = types.ModuleType("homeassistant.components.binary_sensor")
+    sys.modules["homeassistant.components.binary_sensor"].BinarySensorEntity = type("BinarySensorEntity", (), {})
+    sys.modules["homeassistant.components.binary_sensor"].BinarySensorDeviceClass = type("BinarySensorDeviceClass", (), {"CONNECTIVITY": "connectivity"})
+
+    sys.modules["homeassistant.helpers.update_coordinator"] = types.ModuleType("homeassistant.helpers.update_coordinator")
+    sys.modules["homeassistant.helpers.update_coordinator"].DataUpdateCoordinator = type("DataUpdateCoordinator", (), {"__class_getitem__": classmethod(lambda cls, item: cls)})
+    sys.modules["homeassistant.helpers.update_coordinator"].CoordinatorEntity = type("CoordinatorEntity", (), {})
+    sys.modules["homeassistant.helpers.update_coordinator"].UpdateFailed = type("UpdateFailed", (Exception,), {})
+    
     sys.modules["homeassistant.helpers.llm"] = mock_llm
 
     mock_hass.components = mock_components
@@ -134,12 +145,7 @@ def _bootstrap_homeassistant_mocks() -> None:
     mock_const.CONF_LLM_HASS_API = "llm_hass_api"
     mock_const.MATCH_ALL = "*"
 
-    class Platform:
-        """Minimal Platform enum-like object used by integration setup."""
-
-        CONVERSATION = "conversation"
-
-    mock_const.Platform = Platform
+    mock_const.Platform = type("Platform", (), {"CONVERSATION": "conversation", "BINARY_SENSOR": "binary_sensor"})
 
     mock_config_entries.ConfigEntry = MagicMock
     mock_config_entries.ConfigSubentry = MagicMock

@@ -156,7 +156,9 @@ class StrawberryConversationEntity(
 
         # Try Hub first, fall back to local on connection failure
         try:
-            if await self._hub_client.health_check():
+            available = await self._hub_client.health_check()
+            if available:
+                _LOGGER.debug("Hub online — using Hub agent loop")
                 await self._handle_via_hub(user_input, chat_log)
             else:
                 _LOGGER.debug("Hub offline — using local agent loop")
@@ -164,6 +166,11 @@ class StrawberryConversationEntity(
         except (HubConnectionError, HubAuthError) as err:
             _LOGGER.warning("Hub error, falling back to local: %s", err)
             self._hub_client.invalidate_cache()
+            
+            # Trigger a background coordinator update so the binary sensor updates immediately
+            if getattr(self, "hass", None) and (coordinator := self.hass.data.get("strawberry_conversation", {}).get(self._config_entry.entry_id, {}).get("coordinator")):
+                self.hass.async_create_task(coordinator.async_request_refresh())
+                
             try:
                 await self._handle_locally(chat_log)
             except Exception:

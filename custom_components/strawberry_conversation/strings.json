@@ -108,6 +108,11 @@
       "strawberry": {
         "name": "Strawberry"
       }
+    },
+    "binary_sensor": {
+      "hub_connection": {
+        "name": "Hub Connection"
+      }
     }
   }
 }
