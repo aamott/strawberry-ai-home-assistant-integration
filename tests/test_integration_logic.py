@@ -888,9 +888,10 @@ class TestSimplifyMessagesForTensorzero(unittest.TestCase):
         self.assertEqual(result[0]["role"], "user")
         self.assertEqual(result[0]["content"], "Turn on the lights")
 
-        # Assistant message: tool_calls stripped, only role+content kept
+        # Assistant message: tool_calls stripped, content synthesized from calls
         self.assertEqual(result[1]["role"], "assistant")
         self.assertNotIn("tool_calls", result[1])
+        self.assertIn("[Called HassTurnOn(", result[1]["content"])
 
         # Tool message converted to user with descriptive prefix
         self.assertEqual(result[2]["role"], "user")

@@ -220,11 +220,20 @@ def _simplify_messages_for_tensorzero(
             continue
 
         if role == "assistant":
-            # Strip tool_calls — keep only role + content
-            simplified.append({
-                "role": "assistant",
-                "content": msg.get("content") or "",
-            })
+            # Strip tool_calls — keep only role + content.
+            # If content is empty but tool_calls exist, synthesize a
+            # description so the LLM knows what action was taken.
+            content = msg.get("content") or ""
+            tool_calls = msg.get("tool_calls")
+            if not content and tool_calls:
+                summaries: list[str] = []
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    name = fn.get("name", "unknown")
+                    args = fn.get("arguments", "")
+                    summaries.append(f"{name}({args})")
+                content = "[Called " + ", ".join(summaries) + "]"
+            simplified.append({"role": "assistant", "content": content})
             continue
 
         # system, user, etc. — pass through unchanged
